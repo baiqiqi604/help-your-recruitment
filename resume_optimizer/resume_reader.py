@@ -33,12 +33,28 @@ def pdf_to_docx(pdf_path: str, docx_path: str) -> None:
     if not pdf_file.exists():
         raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
 
-    # TODO: 使用 pdf2docx 的 Converter 进行转换
-    # from pdf2docx import Converter
-    # cv = Converter(pdf_path)
-    # cv.convert(docx_path)
-    # cv.close()
-    raise NotImplementedError("pdf_to_docx 待实现")
+    # 确保输出目录存在
+    Path(docx_path).parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from pdf2docx import Converter
+    except ImportError as e:
+        raise ImportError("缺少依赖 pdf2docx，请执行: pip install pdf2docx") from e
+
+    logger.info("开始转换 PDF -> Word: %s", pdf_path)
+    cv = Converter(pdf_path)
+    try:
+        cv.convert(docx_path)
+    finally:
+        cv.close()
+
+    # 校验输出文件是否生成且非空
+    out_file = Path(docx_path)
+    if not out_file.exists() or out_file.stat().st_size == 0:
+        raise ValueError(
+            "PDF 转换失败或结果为空，可能是扫描件/加密件，暂不支持"
+        )
+    logger.info("PDF 转换完成: %s", docx_path)
 
 
 def read_resume(docx_path: str) -> dict[str, Any]:
@@ -64,21 +80,88 @@ def read_resume(docx_path: str) -> dict[str, Any]:
     if not docx_file.exists():
         raise FileNotFoundError(f"Word 文件不存在: {docx_path}")
 
-    # TODO: 使用 python-docx 读取段落和表格
-    # 1. 遍历 document.paragraphs，记录 index/text/style/font
-    # 2. 遍历 document.tables，按行/列读取单元格
-    # 3. 拼接 full_text
-    raise NotImplementedError("read_resume 待实现")
+    try:
+        from docx import Document
+    except ImportError as e:
+        raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
+
+    document = Document(docx_path)
+
+    # 1. 读取段落（保留索引用于后续替换）
+    paragraphs: list[dict[str, Any]] = []
+    text_lines: list[str] = []
+    for index, para in enumerate(document.paragraphs):
+        text = para.text
+        font_info = _extract_font_info(para)
+        paragraphs.append(
+            {
+                "index": index,
+                "text": text,
+                "style": para.style.name if para.style else "",
+                "font": font_info,
+            }
+        )
+        if text.strip():
+            text_lines.append(text)
+
+    # 2. 读取表格（按行/列保留单元格结构）
+    tables: list[list[list[str]]] = []
+    for table in document.tables:
+        table_data: list[list[str]] = []
+        for row in table.rows:
+            row_data = [cell.text for cell in row.cells]
+            table_data.append(row_data)
+            # 表格内容也并入全文
+            for cell_text in row_data:
+                if cell_text.strip():
+                    text_lines.append(cell_text)
+        tables.append(table_data)
+
+    # 3. 拼接全文
+    full_text = "\n".join(text_lines)
+
+    logger.info(
+        "简历读取完成：%d 个段落，%d 个表格",
+        len(paragraphs),
+        len(tables),
+    )
+
+    return {
+        "paragraphs": paragraphs,
+        "tables": tables,
+        "full_text": full_text,
+    }
 
 
-def _extract_font_info(run) -> dict[str, Any]:
-    """从 python-docx 的 run 对象提取字体信息。
+def _extract_font_info(paragraph) -> dict[str, Any]:
+    """从段落的首个非空 run 提取字体信息。
 
     Returns:
-        {"name": str, "size": float, "bold": bool, "italic": bool}
+        {"name": str, "size": float|None, "bold": bool, "italic": bool}
     """
-    # TODO: 提取 run.font 的 name/size/bold/italic 属性
-    raise NotImplementedError("_extract_font_info 待实现")
+    result: dict[str, Any] = {
+        "name": None,
+        "size": None,
+        "bold": False,
+        "italic": False,
+    }
+    # 取首个有文本的 run 作为格式代表
+    target_run = None
+    for run in paragraph.runs:
+        if run.text.strip():
+            target_run = run
+            break
+    if target_run is None and paragraph.runs:
+        target_run = paragraph.runs[0]
+
+    if target_run is not None:
+        font = target_run.font
+        result["name"] = font.name
+        result["size"] = font.size.pt if font.size else None
+        result["bold"] = bool(font.bold)
+        result["italic"] = bool(font.italic)
+
+    return result
 
 
 if __name__ == "__main__":

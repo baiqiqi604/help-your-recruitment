@@ -15,9 +15,13 @@ import json
 import logging
 from typing import Any
 
+import llm_client
 from config import LLM_CONFIG
 
 logger = logging.getLogger(__name__)
+
+# 模型上下文安全长度（超过则截断 JD 文本）
+MAX_JD_CHARS = 6000
 
 
 # 岗位分析 Prompt 模板
@@ -57,32 +61,43 @@ def analyze_jd(jd_text: str) -> dict[str, Any]:
     if not jd_text or not jd_text.strip():
         raise ValueError("岗位描述不能为空")
 
-    # TODO: 边界处理 - 岗位描述过长时截断到模型最大上下文长度
-    # TODO: 调用 LLM 进行分析
-    # 1. 构建 LLM 客户端（DeepSeek OpenAI 兼容接口）
-    # 2. 填充 Prompt
-    # 3. 调用模型，解析返回的 JSON
-    # 4. 校验返回字段完整性
-    raise NotImplementedError("analyze_jd 待实现")
+    # 边界处理：岗位描述过长时截断到安全长度
+    text = jd_text.strip()
+    if len(text) > MAX_JD_CHARS:
+        logger.warning("岗位描述过长（%d 字），截断到 %d 字", len(text), MAX_JD_CHARS)
+        text = text[:MAX_JD_CHARS]
+
+    prompt = JD_ANALYZE_PROMPT.format(jd_text=text)
+    logger.info("调用 DeepSeek 分析岗位需求...")
+    result = llm_client.chat_json(prompt)
+
+    # 校验并补齐返回字段
+    analysis = _normalize_analysis(result)
+    logger.info(
+        "岗位分析完成：核心技能 %d 项，加分技能 %d 项",
+        len(analysis["required_skills"]),
+        len(analysis["preferred_skills"]),
+    )
+    return analysis
 
 
-def _build_llm():
-    """构建 DeepSeek LLM 客户端（基于 LangChain ChatOpenAI）。"""
-    # TODO: 使用 langchain_openai.ChatOpenAI 配置 DeepSeek
-    # from langchain_openai import ChatOpenAI
-    # return ChatOpenAI(
-    #     model=LLM_CONFIG["model_name"],
-    #     api_key=LLM_CONFIG["api_key"],
-    #     base_url=LLM_CONFIG["base_url"],
-    #     temperature=LLM_CONFIG["temperature"],
-    # )
-    raise NotImplementedError("_build_llm 待实现")
+def _normalize_analysis(raw: dict[str, Any]) -> dict[str, Any]:
+    """校验并补齐岗位分析结果字段。"""
 
+    def _as_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
 
-def _parse_llm_json(response_text: str) -> dict[str, Any]:
-    """解析大模型返回的 JSON 文本，容错处理。"""
-    # TODO: 剥离可能的 ```json 代码块标记，json.loads 解析
-    raise NotImplementedError("_parse_llm_json 待实现")
+    return {
+        "required_skills": _as_list(raw.get("required_skills")),
+        "preferred_skills": _as_list(raw.get("preferred_skills")),
+        "responsibilities": _as_list(raw.get("responsibilities")),
+        "experience_years": str(raw.get("experience_years", "")).strip(),
+        "keywords": _as_list(raw.get("keywords")),
+    }
 
 
 if __name__ == "__main__":

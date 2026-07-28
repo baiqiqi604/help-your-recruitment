@@ -136,11 +136,16 @@ def _resolve_jd_text(jd_source: dict[str, Any]) -> str:
         return text
 
     if source_type == "kb":
-        # TODO: 从知识库按 job_id 检索岗位全文
-        # from jd_knowledge_base import get_job_by_id
-        # job = get_job_by_id(jd_source["job_id"])
-        # return job["jd_text"]
-        raise NotImplementedError("知识库岗位检索待实现")
+        # 从知识库按 job_id 检索岗位全文
+        from jd_knowledge_base import get_job_by_id
+
+        job_id = jd_source.get("job_id", "")
+        if not job_id:
+            raise ValueError("知识库岗位来源缺少 job_id")
+        job = get_job_by_id(job_id)
+        if not job or not job.get("jd_text"):
+            raise ValueError(f"知识库中未找到岗位: {job_id}")
+        return job["jd_text"]
 
     raise ValueError(f"未知的岗位来源类型: {source_type}")
 
@@ -156,22 +161,147 @@ def _cleanup_temp(temp_path: str) -> None:
 
 
 def main() -> None:
-    """命令行入口（Phase 4 完善交互流程）。"""
+    """命令行交互入口。"""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # TODO: Phase 4 实现命令行交互
-    # 1. 提示用户输入简历 PDF 路径
-    # 2. 选择岗位来源（知识库浏览 / 手动粘贴）
-    # 3. 调用 optimize_resume
-    # 4. 展示结果
     print("=" * 50)
     print("简历优化 Agent")
     print("=" * 50)
-    print("命令行交互流程待 Phase 4 实现。")
-    print("当前可通过 optimize_resume() 函数直接调用。")
+
+    # 1. 输入简历 PDF 路径
+    pdf_path = input("请输入简历 PDF 路径（默认从 input/ 目录选择）：").strip()
+    if not pdf_path:
+        pdf_path = _pick_resume_from_input()
+        if not pdf_path:
+            print("未找到简历文件，退出。")
+            return
+
+    if not Path(pdf_path).exists():
+        print(f"文件不存在: {pdf_path}")
+        return
+
+    # 2. 选择岗位来源
+    jd_source = _choose_jd_source()
+    if jd_source is None:
+        print("未选择岗位，退出。")
+        return
+
+    # 3. 执行优化
+    print("\n开始优化简历...")
+    result = optimize_resume(pdf_path=pdf_path, jd_source=jd_source)
+
+    # 4. 展示结果
+    print("\n" + "=" * 50)
+    if result["success"]:
+        print("✅ " + result["message"])
+        print(f"   Word: {result['output_docx']}")
+        if result["output_pdf"]:
+            print(f"   PDF : {result['output_pdf']}")
+    else:
+        print("❌ " + result["message"])
+    print("=" * 50)
+
+
+def _pick_resume_from_input() -> str:
+    """从 input/ 目录列出 PDF 文件供用户选择。"""
+    input_dir = Path(PATH_CONFIG["input_dir"])
+    if not input_dir.exists():
+        return ""
+
+    pdfs = sorted(input_dir.glob("*.pdf"))
+    if not pdfs:
+        print(f"input/ 目录下没有 PDF 文件: {input_dir}")
+        return ""
+
+    print("\n检测到以下简历：")
+    for i, pdf in enumerate(pdfs, 1):
+        print(f"  {i}. {pdf.name}")
+
+    choice = input("请选择序号（或直接输入路径）：").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(pdfs):
+        return str(pdfs[int(choice) - 1])
+    return choice
+
+
+def _choose_jd_source() -> dict[str, Any] | None:
+    """选择岗位来源：知识库检索 或 手动粘贴。"""
+    print("\n岗位来源：")
+    print("  1. 从岗位知识库检索")
+    print("  2. 手动粘贴 JD 文本")
+    choice = input("请选择（1/2，默认 2）：").strip() or "2"
+
+    if choice == "1":
+        return _jd_from_knowledge_base()
+
+    # 手动粘贴
+    print("\n请粘贴岗位描述 JD（输入单独一行 END 结束）：")
+    lines: list[str] = []
+    while True:
+        line = input()
+        if line.strip() == "END":
+            break
+        lines.append(line)
+    text = "\n".join(lines).strip()
+    if not text:
+        return None
+    return {"type": "manual", "text": text}
+
+
+def _jd_from_knowledge_base() -> dict[str, Any] | None:
+    """从知识库检索岗位并选择。"""
+    try:
+        from jd_knowledge_base import search_jds, get_premium_jobs
+    except Exception as e:  # noqa: BLE001
+        print(f"知识库不可用: {e}")
+        return None
+
+    print("\n大厂/高频岗位推荐：")
+    try:
+        premium = get_premium_jobs(limit=10)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("获取推荐岗位失败: %s", e)
+        premium = []
+
+    candidates: list[dict[str, Any]] = []
+    if premium:
+        for i, job in enumerate(premium, 1):
+            print(f"  {i}. [{job.get('company', '')}] {job.get('title', '')}"
+                  f" - {job.get('city', '')}")
+        candidates = premium
+
+    query = input("\n输入关键词检索（或直接输入上方序号）：").strip()
+    if not query:
+        return None
+
+    if query.isdigit() and candidates and 1 <= int(query) <= len(candidates):
+        chosen = candidates[int(query) - 1]
+        return {"type": "manual", "text": chosen.get("jd_text", "")}
+
+    # 关键词检索
+    try:
+        results = search_jds(query, top_k=10)
+    except Exception as e:  # noqa: BLE001
+        print(f"检索失败: {e}")
+        return None
+
+    if not results:
+        print("未检索到匹配岗位，请改用手动粘贴。")
+        return None
+
+    print("\n检索结果：")
+    for i, job in enumerate(results, 1):
+        print(f"  {i}. [{job.get('company', '')}] {job.get('title', '')}"
+              f" - {job.get('city', '')}")
+
+    choice = input("选择序号：").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(results):
+        chosen = results[int(choice) - 1]
+        return {"type": "manual", "text": chosen.get("jd_text", "")}
+
+    return None
 
 
 if __name__ == "__main__":

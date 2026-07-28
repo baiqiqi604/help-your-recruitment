@@ -16,12 +16,84 @@ ChromaDB Collection 结构：
 
 from __future__ import annotations
 
+import json
 import logging
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
-from config import CHROMA_CONFIG, EMBEDDING_CONFIG
+from config import (
+    CHROMA_CONFIG,
+    EMBEDDING_CONFIG,
+    PATH_CONFIG,
+    BIG_TECH_COMPANIES,
+    HIGH_FREQUENCY_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────
+# Embedding 封装（兼容 ChromaDB 的 EmbeddingFunction 协议）
+# ──────────────────────────────────────────────
+class BGEEmbeddingFunction:
+    """基于 sentence-transformers 的 BGE 中文 Embedding。
+
+    实现 ChromaDB 的 EmbeddingFunction 协议（__call__）。
+    """
+
+    def __init__(self, model_name: str, device: str = "cpu"):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:
+            raise ImportError(
+                "缺少依赖 sentence-transformers，请执行: "
+                "pip install sentence-transformers"
+            ) from e
+
+        logger.info("加载 Embedding 模型: %s (device=%s)", model_name, device)
+        self._model = SentenceTransformer(model_name, device=device)
+
+    def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+        """将文本列表转为向量列表。"""
+        # BGE 模型推荐对 query 加前缀，但入库文本不加；这里统一不加，检索时也不加
+        embeddings = self._model.encode(
+            input, normalize_embeddings=True, show_progress_bar=False
+        )
+        return embeddings.tolist()
+
+
+@lru_cache(maxsize=1)
+def _get_embedding_function() -> BGEEmbeddingFunction:
+    """获取 BGE Embedding 函数（单例缓存）。"""
+    return BGEEmbeddingFunction(
+        model_name=EMBEDDING_CONFIG["model_name"],
+        device=EMBEDDING_CONFIG["device"],
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_chroma_client():
+    """获取 ChromaDB 持久化客户端（单例缓存）。"""
+    try:
+        import chromadb
+    except ImportError as e:
+        raise ImportError("缺少依赖 chromadb，请执行: pip install chromadb") from e
+
+    persist_dir = CHROMA_CONFIG["persist_directory"]
+    Path(persist_dir).mkdir(parents=True, exist_ok=True)
+    logger.info("初始化 ChromaDB: %s", persist_dir)
+    return chromadb.PersistentClient(path=persist_dir)
+
+
+def _get_collection(name: str):
+    """获取或创建指定名称的 Collection。"""
+    client = _get_chroma_client()
+    return client.get_or_create_collection(
+        name=name,
+        embedding_function=_get_embedding_function(),
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 def build_jd_knowledge_base() -> None:
@@ -34,13 +106,119 @@ def build_jd_knowledge_base() -> None:
     4. 向量化存入 ChromaDB（按 JD 全文 + 技能标签）
     5. 建立关键词索引（按岗位名称、公司名、技能）
     """
-    # TODO: 实现知识库构建
-    # 1. 加载本地 JSON 岗位数据
-    # 2. 初始化 ChromaDB 客户端（持久化目录见 CHROMA_CONFIG）
-    # 3. 创建/获取 jd_fulltext 和 jd_premium 两个 Collection
-    # 4. 使用 BGE Embedding 向量化 JD 全文
-    # 5. 写入向量库（metadata 存公司、技能、城市等）
-    raise NotImplementedError("build_jd_knowledge_base 待实现")
+    jobs = _load_jobs_from_disk()
+    if not jobs:
+        logger.warning("未找到任何岗位数据，知识库为空")
+        return
+
+    # 去重 + 标记
+    from jd_crawler import deduplicate_jobs, mark_premium_jobs
+
+    jobs = deduplicate_jobs(jobs)
+    jobs = mark_premium_jobs(jobs)
+
+    # 全量写入（先清空再写入，适合重建场景）
+    _upsert_jobs(jobs, clear_existing=True)
+    logger.info("岗位知识库构建完成，共入库 %d 个岗位", len(jobs))
+
+
+def _load_jobs_from_disk() -> list[dict[str, Any]]:
+    """从 data/raw 和 data/crawled_jobs 加载所有 JSON 岗位数据。"""
+    jobs: list[dict[str, Any]] = []
+    dirs = [PATH_CONFIG["raw_data_dir"], PATH_CONFIG["crawled_jobs_dir"]]
+
+    for directory in dirs:
+        dir_path = Path(directory)
+        if not dir_path.exists():
+            continue
+        for json_file in dir_path.glob("*.json"):
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    jobs.extend(data)
+                elif isinstance(data, dict):
+                    jobs.append(data)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("读取岗位文件失败 %s: %s", json_file, e)
+
+    logger.info("从磁盘加载到 %d 个原始岗位", len(jobs))
+    return jobs
+
+
+def _job_to_document(job: dict[str, Any]) -> str:
+    """将岗位字典拼接为用于向量化的文本文档。"""
+    parts = [
+        f"岗位：{job.get('title', '')}",
+        f"公司：{job.get('company', '')}",
+        f"城市：{job.get('city', '')}",
+        f"薪资：{job.get('salary', '')}",
+        f"经验：{job.get('experience', '')}",
+        f"学历：{job.get('education', '')}",
+        f"技能：{', '.join(job.get('skills', []))}",
+        f"职位描述：{job.get('jd_text', '')}",
+    ]
+    return "\n".join(p for p in parts if p.split("：", 1)[-1].strip())
+
+
+def _job_to_metadata(job: dict[str, Any]) -> dict[str, Any]:
+    """提取岗位的 metadata（ChromaDB 只支持标量值）。"""
+    return {
+        "job_id": str(job.get("job_id", "")),
+        "platform": str(job.get("platform", "")),
+        "title": str(job.get("title", "")),
+        "company": str(job.get("company", "")),
+        "city": str(job.get("city", "")),
+        "salary": str(job.get("salary", "")),
+        "skills": ",".join(job.get("skills", [])),
+        "is_big_tech": bool(job.get("is_big_tech", False)),
+        "is_high_frequency": bool(job.get("is_high_frequency", False)),
+        "match_count": int(job.get("match_count", 0)),
+        "url": str(job.get("url", "")),
+    }
+
+
+def _upsert_jobs(jobs: list[dict[str, Any]], clear_existing: bool = False) -> None:
+    """将岗位列表写入 ChromaDB。"""
+    fulltext_col = _get_collection(CHROMA_CONFIG["collection_fulltext"])
+    premium_col = _get_collection(CHROMA_CONFIG["collection_premium"])
+
+    if clear_existing:
+        # 清空重建（忽略空集合报错）
+        for col in (fulltext_col, premium_col):
+            try:
+                existing = col.get()
+                if existing and existing.get("ids"):
+                    col.delete(ids=existing["ids"])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("清空 Collection 失败: %s", e)
+
+    ids, documents, metadatas = [], [], []
+    premium_ids, premium_docs, premium_metas = [], [], []
+
+    for job in jobs:
+        job_id = str(job.get("job_id") or f"{job.get('platform')}_{job.get('title')}_{job.get('company')}")
+        doc = _job_to_document(job)
+        meta = _job_to_metadata(job)
+        if not doc.strip():
+            continue
+
+        ids.append(job_id)
+        documents.append(doc)
+        metadatas.append(meta)
+
+        # 大厂或高频岗位进入 premium 集合
+        if meta["is_big_tech"] or meta["is_high_frequency"]:
+            premium_ids.append(job_id)
+            premium_docs.append(doc)
+            premium_metas.append(meta)
+
+    if ids:
+        fulltext_col.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    if premium_ids:
+        premium_col.upsert(ids=premium_ids, documents=premium_docs, metadatas=premium_metas)
+
+    logger.info("写入 fulltext %d 条，premium %d 条", len(ids), len(premium_ids))
 
 
 def search_jds(
@@ -56,12 +234,47 @@ def search_jds(
     Returns:
         匹配的岗位字典列表（按相关度排序）
     """
-    # TODO: 实现向量检索
-    # 1. 将 query 向量化
-    # 2. 在 jd_fulltext（或 jd_premium）中检索
-    # 3. 根据 filter_big_tech 过滤
-    # 4. 返回 top_k 结果
-    raise NotImplementedError("search_jds 待实现")
+    collection = _get_collection(
+        CHROMA_CONFIG["collection_premium"] if filter_big_tech
+        else CHROMA_CONFIG["collection_fulltext"]
+    )
+
+    where_filter = {"is_big_tech": True} if filter_big_tech else None
+
+    try:
+        results = collection.query(
+            query_texts=[query],
+            n_results=top_k,
+            where=where_filter,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("岗位检索失败: %s", e)
+        return []
+
+    return _format_query_results(results)
+
+
+def _format_query_results(results: dict[str, Any]) -> list[dict[str, Any]]:
+    """将 ChromaDB query 结果转为岗位字典列表。"""
+    jobs: list[dict[str, Any]] = []
+    if not results or not results.get("ids"):
+        return jobs
+
+    ids = results["ids"][0]
+    metadatas = results.get("metadatas", [[]])[0]
+    documents = results.get("documents", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    for idx, job_id in enumerate(ids):
+        meta = metadatas[idx] if idx < len(metadatas) else {}
+        job = dict(meta)
+        job["job_id"] = job_id
+        job["jd_text"] = documents[idx] if idx < len(documents) else ""
+        if idx < len(distances):
+            job["score"] = 1 - distances[idx]  # cosine 距离转相似度
+        jobs.append(job)
+
+    return jobs
 
 
 def get_premium_jobs(limit: int = 50) -> list[dict[str, Any]]:
@@ -73,8 +286,29 @@ def get_premium_jobs(limit: int = 50) -> list[dict[str, Any]]:
     Returns:
         优质岗位列表（大厂 + 高频）
     """
-    # TODO: 从 jd_premium Collection 读取
-    raise NotImplementedError("get_premium_jobs 待实现")
+    collection = _get_collection(CHROMA_CONFIG["collection_premium"])
+    try:
+        results = collection.get(limit=limit)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("获取优质岗位失败: %s", e)
+        return []
+
+    jobs: list[dict[str, Any]] = []
+    if not results or not results.get("ids"):
+        return jobs
+
+    ids = results["ids"]
+    metadatas = results.get("metadatas", [])
+    documents = results.get("documents", [])
+
+    for idx, job_id in enumerate(ids):
+        meta = metadatas[idx] if idx < len(metadatas) else {}
+        job = dict(meta)
+        job["job_id"] = job_id
+        job["jd_text"] = documents[idx] if idx < len(documents) else ""
+        jobs.append(job)
+
+    return jobs
 
 
 def increment_update(jobs: list[dict[str, Any]]) -> None:
@@ -83,25 +317,54 @@ def increment_update(jobs: list[dict[str, Any]]) -> None:
     Args:
         jobs: 新爬取的岗位列表
     """
-    # TODO: 实现增量更新
-    # 1. 查询已存在的 job_id
-    # 2. 只插入新岗位
-    # 3. 更新大厂/高频标记
-    raise NotImplementedError("increment_update 待实现")
+    if not jobs:
+        logger.info("增量更新：无新岗位")
+        return
+
+    from jd_crawler import mark_premium_jobs
+
+    jobs = mark_premium_jobs(jobs)
+
+    collection = _get_collection(CHROMA_CONFIG["collection_fulltext"])
+    existing_ids = set()
+    try:
+        existing = collection.get()
+        if existing and existing.get("ids"):
+            existing_ids = set(existing["ids"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("查询已有岗位失败: %s", e)
+
+    new_jobs = [
+        job for job in jobs
+        if str(job.get("job_id", "")) and str(job.get("job_id")) not in existing_ids
+    ]
+
+    if not new_jobs:
+        logger.info("增量更新：无新增岗位（全部已存在）")
+        return
+
+    _upsert_jobs(new_jobs, clear_existing=False)
+    logger.info("增量更新完成，新增 %d 个岗位", len(new_jobs))
 
 
-def _get_embedding_function():
-    """获取 BGE Embedding 函数（用于 ChromaDB）。"""
-    # TODO: 使用 sentence-transformers 加载 BGE-large-zh-v1.5
-    # 可封装为 ChromaDB 兼容的 EmbeddingFunction
-    raise NotImplementedError("_get_embedding_function 待实现")
+def get_job_by_id(job_id: str) -> dict[str, Any] | None:
+    """按 job_id 从知识库获取单个岗位全文。"""
+    collection = _get_collection(CHROMA_CONFIG["collection_fulltext"])
+    try:
+        results = collection.get(ids=[job_id])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("按 ID 获取岗位失败: %s", e)
+        return None
 
+    if not results or not results.get("ids"):
+        return None
 
-def _get_chroma_client():
-    """获取 ChromaDB 持久化客户端。"""
-    # TODO: import chromadb
-    # return chromadb.PersistentClient(path=CHROMA_CONFIG["persist_directory"])
-    raise NotImplementedError("_get_chroma_client 待实现")
+    meta = results.get("metadatas", [{}])[0] or {}
+    job = dict(meta)
+    job["job_id"] = job_id
+    docs = results.get("documents", [])
+    job["jd_text"] = docs[0] if docs else ""
+    return job
 
 
 if __name__ == "__main__":

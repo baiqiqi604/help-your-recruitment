@@ -32,40 +32,86 @@ def daily_crawl_task() -> dict[str, Any]:
             "finished_at": str
         }
     """
-    from jd_crawler import crawl_jobs
+    from jd_crawler import crawl_jobs, save_jobs
 
     keywords = CRAWLER_CONFIG["keywords"]
     city = CRAWLER_CONFIG["default_city"]
 
     all_jobs: list[dict[str, Any]] = []
+    by_platform: dict[str, int] = {}
+
     for keyword in keywords:
         logger.info("正在爬取关键词: %s", keyword)
         try:
             jobs = crawl_jobs(keyword, city)
             all_jobs.extend(jobs)
+            # 统计各平台数量
+            for job in jobs:
+                platform = job.get("platform", "unknown")
+                by_platform[platform] = by_platform.get(platform, 0) + 1
         except Exception as e:  # noqa: BLE001
             logger.warning("关键词 %s 爬取失败: %s", keyword, e)
 
-    # TODO: 存档到 data/crawled_jobs（按日期命名 JSON）
-    # TODO: 增量更新知识库（调用 jd_knowledge_base.increment_update）
-    # TODO: 统计并返回结果
-    raise NotImplementedError("daily_crawl_task 待实现")
+    # 跨关键词统一去重
+    from jd_crawler import deduplicate_jobs, mark_premium_jobs
+
+    all_jobs = mark_premium_jobs(deduplicate_jobs(all_jobs))
+
+    # 存档到 data/crawled_jobs（按日期命名 JSON）
+    saved_path = ""
+    if all_jobs:
+        saved_path = save_jobs(all_jobs, tag="daily")
+
+    # 增量更新知识库
+    try:
+        from jd_knowledge_base import increment_update
+
+        increment_update(all_jobs)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("知识库增量更新失败: %s", e)
+
+    finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(
+        "每日爬取完成：共 %d 个岗位，各平台 %s",
+        len(all_jobs),
+        by_platform,
+    )
+
+    return {
+        "total_jobs": len(all_jobs),
+        "by_platform": by_platform,
+        "saved_path": saved_path,
+        "finished_at": finished_at,
+    }
 
 
 def start_scheduler() -> None:
-    """启动定时调度器（后台运行）。"""
-    # TODO: 使用 APScheduler 的 BackgroundScheduler
-    # from apscheduler.schedulers.background import BackgroundScheduler
-    # scheduler = BackgroundScheduler()
-    # scheduler.add_job(
-    #     func=daily_crawl_task,
-    #     trigger="cron",
-    #     hour=SCHEDULER_CONFIG["hour"],
-    #     minute=SCHEDULER_CONFIG["minute"],
-    #     id=SCHEDULER_CONFIG["job_id"],
-    # )
-    # scheduler.start()
-    raise NotImplementedError("start_scheduler 待实现")
+    """启动定时调度器（后台运行，阻塞主线程）。"""
+    try:
+        from apscheduler.schedulers.blocking import BlockingScheduler
+    except ImportError as e:
+        raise ImportError(
+            "缺少依赖 APScheduler，请执行: pip install APScheduler"
+        ) from e
+
+    scheduler = BlockingScheduler()
+    scheduler.add_job(
+        func=daily_crawl_task,
+        trigger="cron",
+        hour=SCHEDULER_CONFIG["hour"],
+        minute=SCHEDULER_CONFIG["minute"],
+        id=SCHEDULER_CONFIG["job_id"],
+        replace_existing=True,
+    )
+    logger.info(
+        "定时调度器已启动：每日 %02d:%02d 执行爬取",
+        SCHEDULER_CONFIG["hour"],
+        SCHEDULER_CONFIG["minute"],
+    )
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("调度器已停止")
 
 
 def run_once() -> dict[str, Any]:
@@ -74,9 +120,16 @@ def run_once() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    # 手动执行一次
-    # print(run_once())
-    # 或启动定时调度
-    # start_scheduler()
-    print("scheduler 模块：使用 run_once() 手动触发或 start_scheduler() 定时运行")
+    import sys
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    # 用法：python scheduler.py [once|daemon]
+    mode = sys.argv[1] if len(sys.argv) > 1 else "once"
+    if mode == "daemon":
+        start_scheduler()
+    else:
+        print(run_once())

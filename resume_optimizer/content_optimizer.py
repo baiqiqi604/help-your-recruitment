@@ -15,9 +15,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import llm_client
 from config import LLM_CONFIG
 
 logger = logging.getLogger(__name__)
+
+# 简历文本安全长度（超过则截断）
+MAX_RESUME_CHARS = 12000
 
 
 # 简历优化 Prompt 模板（内置定制简历九大原则）
@@ -71,12 +75,28 @@ def optimize_resume_content(resume_text: str, jd_analysis: dict[str, Any]) -> st
     if not jd_analysis:
         raise ValueError("岗位分析结果不能为空")
 
-    # TODO: 实现优化流程
-    # 1. （可选 RAG 增强）将简历切块，用 JD 关键词检索最相关经历块
-    # 2. 填充 OPTIMIZE_PROMPT
-    # 3. 调用 LLM 生成优化后全文
-    # 4. 返回结果
-    raise NotImplementedError("optimize_resume_content 待实现")
+    # 边界处理：简历过长时截断
+    text = resume_text.strip()
+    if len(text) > MAX_RESUME_CHARS:
+        logger.warning("简历文本过长（%d 字），截断到 %d 字", len(text), MAX_RESUME_CHARS)
+        text = text[:MAX_RESUME_CHARS]
+
+    prompt = OPTIMIZE_PROMPT.format(
+        required_skills=", ".join(jd_analysis.get("required_skills", [])) or "未提供",
+        preferred_skills=", ".join(jd_analysis.get("preferred_skills", [])) or "未提供",
+        responsibilities=", ".join(jd_analysis.get("responsibilities", [])) or "未提供",
+        experience_years=jd_analysis.get("experience_years", "") or "未提供",
+        resume_text=text,
+    )
+
+    logger.info("调用 DeepSeek 优化简历内容...")
+    optimized = llm_client.chat(prompt).strip()
+
+    if not optimized:
+        raise ValueError("模型返回的优化结果为空")
+
+    logger.info("简历优化完成，输出 %d 字", len(optimized))
+    return optimized
 
 
 def build_matching_table(
@@ -95,14 +115,51 @@ def build_matching_table(
             ...
         ]
     """
-    # TODO: 调用 LLM 建立 JD 要求与简历经历的映射关系
-    raise NotImplementedError("build_matching_table 待实现")
+    if not resume_text or not resume_text.strip():
+        raise ValueError("简历文本不能为空")
+    if not jd_analysis:
+        raise ValueError("岗位分析结果不能为空")
 
+    prompt = f"""你是一位招聘匹配分析师。请建立「岗位需求」与「简历经历」的匹配关系表。
 
-def _build_llm():
-    """构建 DeepSeek LLM 客户端。"""
-    # TODO: 复用 jd_analyzer 中的 LLM 构建逻辑（可抽取到公共模块）
-    raise NotImplementedError("_build_llm 待实现")
+【岗位核心技能】{", ".join(jd_analysis.get("required_skills", []))}
+【岗位职责】{", ".join(jd_analysis.get("responsibilities", []))}
+
+【简历全文】
+{resume_text[:MAX_RESUME_CHARS]}
+
+请以 JSON 数组格式返回，每个元素包含：
+- jd_requirement: JD 要求
+- user_evidence: 简历中对应的经历证据（找不到则填“无明确证据”）
+- match_strength: 匹配强度（strong/medium/weak）
+- suggested_expression: 推荐的简历表达
+
+只返回 JSON 数组，不要其他内容。"""
+
+    logger.info("调用 DeepSeek 构建匹配关系表...")
+    raw = llm_client.chat(prompt)
+
+    # 解析 JSON 数组（复用 llm_client 的容错逻辑，但需处理数组情形）
+    import json
+    import re
+
+    text = raw.strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    bracket = re.search(r"\[.*\]", text, re.DOTALL)
+    if bracket:
+        text = bracket.group(0)
+
+    try:
+        table = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.warning("匹配关系表解析失败: %s", e)
+        return []
+
+    if not isinstance(table, list):
+        return []
+    return table
 
 
 if __name__ == "__main__":
