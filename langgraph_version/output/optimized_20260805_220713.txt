@@ -1,0 +1,29 @@
+张三 | 13800001234 | zhangsan@example.com | 北京
+
+求职目标：Python 后端开发工程师
+
+个人摘要：
+3 年 Python 后端开发经验，熟练使用 Django/Flask 构建业务系统，具备 MySQL 性能优化与 Redis 缓存设计实战经验，追求高质量、可维护的工程实践。
+
+核心技能：
+Python（熟练）｜Django / Django REST Framework（熟练）｜MySQL（熟练）｜Redis（熟练）｜Flask（熟悉）｜Linux / Git（熟练）
+
+工作经历：
+2022.07 - 至今 某科技有限公司 后端开发工程师
+- 使用 Django REST Framework 独立完成订单模块接口设计开发，支撑日均万级请求
+- 落地 MySQL 慢查询优化与 Redis 热点缓存，核心接口响应时间降低 30%
+2021.06 - 2022.06 某网络公司 初级开发工程师
+- 基于 Flask 开发 RESTful API 并持续迭代维护
+
+项目经历：
+订单管理系统（Django + MySQL + Redis）
+- 设计订单状态机与库存扣减接口，保证数据一致性
+- 使用 Redis 缓存热点数据，有效减轻数据库压力
+
+教育背景：
+2017.09 - 2021.06 某某大学 计算机科学与技术 本科
+
+证书 / 奖项：
+- CET-6
+
+（本条为 MOCK 演示输出，配置真实 API Key 后由模型生成）

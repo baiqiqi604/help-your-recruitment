@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>简历优化 Agent · LangChain 版</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --primary: #3b6ff2;
+    --primary-dark: #2f5ad0;
+    --text: #1f2733;
+    --muted: #6b7688;
+    --border: #e3e8f0;
+    --ok: #1f9d55;
+    --warn: #d97706;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    background: linear-gradient(135deg, #2f5ad0, #5b8bf7);
+    color: #fff;
+    padding: 22px 28px;
+  }
+  header h1 { font-size: 22px; font-weight: 600; }
+  header p { font-size: 13px; opacity: .85; margin-top: 4px; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 20px 16px 60px; }
+
+  /* 选项卡 */
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tab {
+    padding: 10px 22px; border: 1px solid var(--border); background: var(--card);
+    border-radius: 999px; cursor: pointer; font-size: 14px; color: var(--muted);
+    transition: all .2s;
+  }
+  .tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .tab:hover:not(.active) { border-color: var(--primary); color: var(--primary); }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+  }
+  .card h3 { font-size: 15px; margin-bottom: 12px; }
+
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  textarea, input[type="text"] {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 14px; font-family: inherit;
+    resize: vertical; background: #fbfcfe; color: var(--text);
+  }
+  textarea:focus, input[type="text"]:focus { outline: 2px solid var(--primary); border-color: transparent; }
+  textarea.resume { min-height: 240px; }
+  textarea.jd { min-height: 140px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .row .grow { flex: 1; min-width: 180px; }
+
+  .btn {
+    border: none; border-radius: 8px; background: var(--primary); color: #fff;
+    padding: 10px 26px; font-size: 14px; cursor: pointer; transition: background .2s;
+    margin-top: 12px;
+  }
+  .btn:hover { background: var(--primary-dark); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+
+  /* 聊天区 */
+  .chat-box {
+    height: 420px; overflow-y: auto; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px; background: #fbfcfe;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.agent { align-self: flex-start; background: #eef2fb; border-bottom-left-radius: 4px; }
+  .chat-input { display: flex; gap: 10px; margin-top: 12px; }
+  .chat-input input { flex: 1; }
+
+  /* 结果区 */
+  .result { margin-top: 16px; display: none; }
+  .result.show { display: block; }
+  .result h4 { font-size: 14px; margin: 14px 0 8px; color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f2f5fb; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+  .tag.strong { background: #e6f6ec; color: var(--ok); }
+  .tag.medium { background: #fdf3e3; color: var(--warn); }
+  .tag.weak { background: #fdecec; color: #c0392b; }
+  .jd-analysis { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: #eef2fb; border: 1px solid var(--border); padding: 3px 10px; border-radius: 999px; font-size: 12px; }
+  .loading { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .error { color: #c0392b; font-size: 13px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📄 简历优化 Agent（LangChain 版）</h1>
+  <p>岗位检索 · JD 分析 · 简历优化 · 匹配关系表 —— 基于大模型工具调用 Agent</p>
+</header>
+
+<div class="wrap">
+  <!-- 选项卡 -->
+  <div class="tabs">
+    <button class="tab active" data-tab="chat">智能对话</button>
+    <button class="tab" data-tab="optimize">简历优化</button>
+  </div>
+
+  <!-- 智能对话 -->
+  <div class="panel active" id="panel-chat">
+    <div class="card">
+      <h3>与 Agent 对话</h3>
+      <div class="chat-box" id="chatBox">
+        <div class="msg agent">你好！我是简历优化 Agent。你可以问我：帮我找几个 Python 岗位、分析这份 JD、优化简历……</div>
+      </div>
+      <div class="chat-input">
+        <input type="text" id="chatInput" placeholder="输入你的问题，回车发送…">
+        <button class="btn" id="sendBtn">发送</button>
+      </div>
+      <div class="loading" id="chatLoading" style="display:none;">Agent 思考中…</div>
+      <div class="error" id="chatError" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- 简历优化 -->
+  <div class="panel" id="panel-optimize">
+    <div class="card">
+      <h3>一键简历优化</h3>
+      <label for="resumeText">原始简历（文本）</label>
+      <textarea id="resumeText" class="resume" placeholder="粘贴你的简历文本…"></textarea>
+
+      <div class="row">
+        <div class="grow">
+          <label for="jdText">岗位描述 JD（二选一：粘贴 JD）</label>
+          <textarea id="jdText" class="jd" placeholder="粘贴岗位描述…"></textarea>
+        </div>
+        <div class="grow">
+          <label for="jobId">或知识库岗位 ID（二选一）</label>
+          <input type="text" id="jobId" placeholder="如从 /api/jobs/search 获取的 id">
+        </div>
+      </div>
+
+      <button class="btn" id="optimizeBtn">开始优化</button>
+      <div class="loading" id="optLoading" style="display:none;">正在分析并优化简历（可能需要几十秒）…</div>
+      <div class="error" id="optError" style="display:none;"></div>
+    </div>
+
+    <div class="result" id="optResult">
+      <div class="card">
+        <h3>📋 JD 分析结果</h3>
+        <div id="jdAnalysis"></div>
+      </div>
+      <div class="card">
+        <h3>✨ 优化后简历</h3>
+        <textarea id="optimizedText" class="resume" readonly style="min-height:300px;"></textarea>
+      </div>
+      <div class="card">
+        <h3>🔗 简历-JD 匹配关系表</h3>
+        <table id="matchTable">
+          <thead>
+            <tr><th>JD 要求</th><th>简历对应证据</th><th>匹配强度</th><th>推荐表达</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // 会话 id（页面生命周期内保持，用于多轮记忆）
+  var sessionId =
+    (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() :
+    ("s-" + Date.now() + "-" + Math.floor(Math.random() * 1e6));
+
+  // ── 选项卡切换 ──
+  var tabs = document.querySelectorAll(".tab");
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      tabs.forEach(function (t) { t.classList.remove("active"); });
+      tab.classList.add("active");
+      document.querySelectorAll(".panel").forEach(function (p) { p.classList.remove("active"); });
+      document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
+    });
+  });
+
+  // ── 工具函数 ──
+  function setText(id, txt) { document.getElementById(id).textContent = txt; }
+  function setVisible(id, on) { document.getElementById(id).style.display = on ? "" : "none"; }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // ── 智能对话 ──
+  var chatBox = document.getElementById("chatBox");
+  function addMsg(role, text) {
+    var div = document.createElement("div");
+    div.className = "msg " + role;
+    div.textContent = text;
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+
+  async function sendChat(text) {
+    setVisible("chatError", false);
+    setVisible("chatLoading", true);
+    document.getElementById("sendBtn").disabled = true;
+    try {
+      var resp = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: text }],
+          session_id: sessionId
+        })
+      });
+      var data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || ("HTTP " + resp.status));
+      addMsg("agent", data.reply);
+    } catch (e) {
+      setText("chatError", "请求失败：" + e.message);
+      setVisible("chatError", true);
+    } finally {
+      setVisible("chatLoading", false);
+      document.getElementById("sendBtn").disabled = false;
+    }
+  }
+
+  function submitChat() {
+    var input = document.getElementById("chatInput");
+    var text = input.value.trim();
+    if (!text) return;
+    addMsg("user", text);
+    input.value = "";
+    sendChat(text);
+  }
+  document.getElementById("sendBtn").addEventListener("click", submitChat);
+  document.getElementById("chatInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") submitChat();
+  });
+
+  // ── 简历优化 ──
+  function renderAnalysis(a) {
+    var box = document.getElementById("jdAnalysis");
+    var html = "";
+    if (a.required_skills && a.required_skills.length)
+      html += "<p>核心技能：" + a.required_skills.map(escapeHtml).map(function (s) { return '<span class="chip">' + s + "</span>"; }).join("") + "</p>";
+    if (a.preferred_skills && a.preferred_skills.length)
+      html += "<p>加分技能：" + a.preferred_skills.map(escapeHtml).map(function (s) { return '<span class="chip">' + s + "</span>"; }).join("") + "</p>";
+    if (a.experience_years)
+      html += "<p>经验要求：<b>" + escapeHtml(a.experience_years) + "</b></p>";
+    if (a.responsibilities && a.responsibilities.length)
+      html += "<p>岗位职责：</p><ul>" + a.responsibilities.map(function (r) { return "<li>" + escapeHtml(r) + "</li>"; }).join("") + "</ul>";
+    box.innerHTML = html || "（暂无分析数据）";
+  }
+
+  function renderTable(rows) {
+    var tbody = document.querySelector("#matchTable tbody");
+    tbody.innerHTML = "";
+    if (!rows || !rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4">暂无匹配数据</td></tr>';
+      return;
+    }
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var cls = r.match_strength === "strong" ? "strong" : (r.match_strength === "medium" ? "medium" : "weak");
+      tr.innerHTML =
+        "<td>" + escapeHtml(r.jd_requirement || "") + "</td>" +
+        "<td>" + escapeHtml(r.user_evidence || "") + "</td>" +
+        '<td><span class="tag ' + cls + '">' + escapeHtml(r.match_strength || "") + "</span></td>" +
+        "<td>" + escapeHtml(r.suggested_expression || "") + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function runOptimize() {
+    setVisible("optError", false);
+    setVisible("optLoading", true);
+    document.getElementById("optimizeBtn").disabled = true;
+    document.getElementById("optResult").classList.remove("show");
+    try {
+      var body = { resume_text: document.getElementById("resumeText").value.trim() };
+      var jd = document.getElementById("jdText").value.trim();
+      var jobId = document.getElementById("jobId").value.trim();
+      if (jd) body.jd_text = jd;
+      else if (jobId) body.job_id = jobId;
+
+      var resp = await fetch("/api/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      var data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || ("HTTP " + resp.status));
+
+      document.getElementById("optimizedText").value = data.optimized || "";
+      renderAnalysis(data.jd_analysis || {});
+      renderTable(data.matching_table || []);
+      document.getElementById("optResult").classList.add("show");
+    } catch (e) {
+      setText("optError", "优化失败：" + e.message);
+      setVisible("optError", true);
+    } finally {
+      setVisible("optLoading", false);
+      document.getElementById("optimizeBtn").disabled = false;
+    }
+  }
+  document.getElementById("optimizeBtn").addEventListener("click", runOptimize);
+})();
+</script>
+</body>
+</html>

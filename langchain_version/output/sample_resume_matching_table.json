@@ -1,0 +1,20 @@
+[
+  {
+    "jd_requirement": "熟悉 Django 或 Flask 框架",
+    "user_evidence": "使用 Django REST Framework 开发后端接口",
+    "match_strength": "strong",
+    "suggested_expression": "使用 Django REST Framework 独立完成订单模块接口开发"
+  },
+  {
+    "jd_requirement": "熟悉 MySQL、Redis",
+    "user_evidence": "维护 MySQL 表结构并做慢查询优化，使用 Redis 缓存热点数据",
+    "match_strength": "strong",
+    "suggested_expression": "负责 MySQL 表结构设计与慢查询优化，落地 Redis 缓存方案降低 30% 响应时间"
+  },
+  {
+    "jd_requirement": "了解微服务架构与 Docker",
+    "user_evidence": "无明确证据",
+    "match_strength": "weak",
+    "suggested_expression": "【待确认】补充微服务 / Docker 相关实践经验"
+  }
+]

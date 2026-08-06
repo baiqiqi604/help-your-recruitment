@@ -1,0 +1,22 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 编辑器 ──
+.vscode/
+.idea/
+
+# ── 运行产物 / 日志 ──
+*.log
+web_out.log
+web_err.log
+.env
+
+# ── 数据目录(保留 .gitkeep)──
+data/chroma_db/*
+data/crawled_jobs/*
+data/raw/*
+!data/**/.gitkeep
