@@ -52,7 +52,8 @@ def pdf_to_docx(pdf_path: str, docx_path: str) -> None:
     out_file = Path(docx_path)
     if not out_file.exists() or out_file.stat().st_size == 0:
         raise ValueError(
-            "PDF 转换失败或结果为空，可能是扫描件/加密件，暂不支持"
+            "PDF 转换失败或结果为空，可能是扫描件/加密件，暂不支持；"
+            "请改传 DOCX 格式简历（复杂 PDF 无法高保真还原）"
         )
     logger.info("PDF 转换完成: %s", docx_path)
 
