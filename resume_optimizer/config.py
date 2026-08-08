@@ -19,13 +19,20 @@ from pathlib import Path
 # ──────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 
+# 尝试加载 .env（失败则忽略，依赖环境变量）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except ImportError:
+    pass
+
 # ──────────────────────────────────────────────
 # 大语言模型配置（DeepSeek）
 # DeepSeek 提供 OpenAI 兼容接口
 # ──────────────────────────────────────────────
 LLM_CONFIG = {
     "provider": "deepseek",
-    "api_key": os.getenv("DEEPSEEK_API_KEY", "your-deepseek-api-key-here"),
+    "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-bc783143515b42dab04ea20b1cd0b84a"),
     "base_url": "https://api.deepseek.com",
     "model_name": "deepseek-chat",  # deepseek-chat / deepseek-reasoner
     "temperature": 0.3,             # 简历优化偏稳定，温度调低

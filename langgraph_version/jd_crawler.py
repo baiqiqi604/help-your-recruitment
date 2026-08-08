@@ -32,10 +32,12 @@ import hashlib
 import json
 import logging
 import random
+import re
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus, urljoin
 
 from config import CRAWLER_CONFIG, BIG_TECH_COMPANIES, HIGH_FREQUENCY_THRESHOLD, PATH_CONFIG
 
@@ -98,6 +100,74 @@ def crawl_jobs(
     return all_jobs
 
 
+def crawl_jobs_batch(
+    keywords: list[str],
+    city: str = "全国",
+    platforms: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Batch crawl jobs while reusing one browser session for Liepin."""
+    cleaned_keywords = list(dict.fromkeys(k.strip() for k in keywords if k.strip()))
+    if not cleaned_keywords:
+        return []
+
+    selected_platforms = platforms or CRAWLER_CONFIG["platforms"]
+    all_jobs: list[dict[str, Any]] = []
+
+    if "liepin" in selected_platforms:
+        try:
+            liepin_jobs = crawl_liepin_browser(cleaned_keywords, city)
+            all_jobs.extend(liepin_jobs)
+            if not liepin_jobs:
+                logger.info("Liepin browser returned no jobs; trying HTTP/curated fallback")
+                for keyword in cleaned_keywords:
+                    try:
+                        http_jobs = _httpx_html_crawl(
+                            platform="liepin",
+                            search_url="https://www.liepin.com/zhaopin/?key={keyword}",
+                            keyword=keyword,
+                            city=city,
+                        )
+                        all_jobs.extend(http_jobs or _load_curated_data("liepin", keyword))
+                    except Exception as fallback_error:  # noqa: BLE001
+                        logger.warning("Liepin HTTP fallback failed for %s: %s", keyword, fallback_error)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Liepin browser batch crawl failed: %s", e)
+            for keyword in cleaned_keywords:
+                try:
+                    all_jobs.extend(_load_curated_data("liepin", keyword))
+                except Exception as fallback_error:  # noqa: BLE001
+                    logger.warning("Liepin fallback failed for %s: %s", keyword, fallback_error)
+
+    if "zhilian" in selected_platforms:
+        try:
+            zhilian_jobs = crawl_zhilian_browser(cleaned_keywords, city)
+            all_jobs.extend(zhilian_jobs)
+            if not zhilian_jobs:
+                logger.info("Zhilian browser returned no jobs; trying HTTP/curated fallback")
+                for keyword in cleaned_keywords:
+                    try:
+                        all_jobs.extend(_load_curated_data("zhilian", keyword))
+                    except Exception as fallback_error:  # noqa: BLE001
+                        logger.warning("Zhilian fallback failed for %s: %s", keyword, fallback_error)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Zhilian browser batch crawl failed: %s", e)
+            for keyword in cleaned_keywords:
+                try:
+                    all_jobs.extend(_load_curated_data("zhilian", keyword))
+                except Exception as fallback_error:  # noqa: BLE001
+                    logger.warning("Zhilian fallback failed for %s: %s", keyword, fallback_error)
+
+    other_platforms = [p for p in selected_platforms if p not in ("liepin", "zhilian")]
+    for keyword in cleaned_keywords:
+        for platform in other_platforms:
+            try:
+                all_jobs.extend(_crawl_platform(platform, keyword, city))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("%s crawl failed for %s: %s", platform, keyword, e)
+
+    return mark_premium_jobs(deduplicate_jobs(all_jobs))
+
+
 def _crawl_platform(platform: str, keyword: str, city: str) -> list[dict[str, Any]]:
     """单平台爬取分发器（含四级降级）。"""
     dispatch = {
@@ -105,6 +175,8 @@ def _crawl_platform(platform: str, keyword: str, city: str) -> list[dict[str, An
         "lagou": _crawl_lagou,
         "liepin": _crawl_liepin,
         "zhilian": _crawl_zhilian,
+        "jobui": _crawl_jobui,
+        "51job": _crawl_51job,
     }
     handler = dispatch.get(platform)
     if handler is None:
@@ -284,12 +356,330 @@ def _crawl_lagou(keyword: str, city: str) -> list[dict[str, Any]]:
 def _crawl_liepin(keyword: str, city: str) -> list[dict[str, Any]]:
     """猎聘：httpx + Cookie + HTML 解析。"""
     logger.info("猎聘爬取: keyword=%s, city=%s", keyword, city)
-    return _httpx_html_crawl(
+    jobs = _httpx_html_crawl(
         platform="liepin",
         search_url="https://www.liepin.com/zhaopin/?key={keyword}",
         keyword=keyword,
         city=city,
     )
+    if jobs:
+        return jobs
+    return crawl_liepin_browser([keyword], city)
+
+
+LIEPIN_CARD_SELECTOR = "div.job-card-pc-container"
+ZHILIAN_CARD_SELECTOR = "div.joblist-box__item"
+
+
+def crawl_liepin_browser(keywords: list[str], city: str) -> list[dict[str, Any]]:
+    """Crawl public Liepin result pages through one normal browser session."""
+    browser_config = CRAWLER_CONFIG.get("liepin_browser", {})
+    if not browser_config.get("enabled", True):
+        return []
+
+    try:
+        from DrissionPage import ChromiumPage
+    except ImportError as e:
+        raise ImportError("DrissionPage is required for Liepin browser crawling") from e
+
+    page = ChromiumPage()
+    jobs: list[dict[str, Any]] = []
+    try:
+        for keyword in keywords:
+            if keyword.strip():
+                jobs.extend(_crawl_liepin_browser_keyword(page, keyword.strip(), city))
+    finally:
+        try:
+            page.quit()
+        except Exception:  # noqa: BLE001
+            pass
+    return deduplicate_jobs(jobs)
+
+
+def _crawl_liepin_browser_keyword(page, keyword: str, city: str) -> list[dict[str, Any]]:
+    """Crawl paginated Liepin cards and stop when pages repeat or have no new jobs."""
+    from bs4 import BeautifulSoup
+
+    browser_config = CRAWLER_CONFIG.get("liepin_browser", {})
+    max_pages = browser_config.get("max_pages", CRAWLER_CONFIG["max_pages"])
+    render_wait = browser_config.get("render_wait_seconds", 2)
+    min_cards = browser_config.get("min_cards_per_page", 5)
+    jobs: list[dict[str, Any]] = []
+    seen_pages: set[tuple[str, ...]] = set()
+    seen_ids: set[str] = set()
+
+    for page_num in range(1, max_pages + 1):
+        url = (
+            "https://www.liepin.com/zhaopin/?key="
+            f"{quote_plus(keyword)}&page={page_num}"
+        )
+        logger.info("Liepin browser crawl: keyword=%s page=%d", keyword, page_num)
+        try:
+            page.get(url)
+            page.wait.doc_loaded()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Liepin page load failed for keyword=%s page=%d: %s", keyword, page_num, e)
+            break
+        try:
+            page.wait.ele_displayed(LIEPIN_CARD_SELECTOR, timeout=CRAWLER_CONFIG["timeout"])
+        except Exception:  # noqa: BLE001
+            logger.warning("Liepin has no rendered cards for keyword=%s page=%d", keyword, page_num)
+            break
+
+        if render_wait:
+            page.wait(render_wait)
+        cards = BeautifulSoup(page.html, "lxml").select(LIEPIN_CARD_SELECTOR)
+        page_jobs = [
+            job
+            for card in cards
+            if (job := _parse_liepin_browser_card(card, city)) is not None
+        ]
+        page_signature = tuple(sorted(job["job_id"] for job in page_jobs))
+        if not page_jobs or page_signature in seen_pages:
+            logger.info("Liepin page repeated or contained no jobs; stopping keyword=%s", keyword)
+            break
+        seen_pages.add(page_signature)
+
+        new_jobs = [job for job in page_jobs if job["job_id"] not in seen_ids]
+        if not new_jobs:
+            break
+        seen_ids.update(job["job_id"] for job in new_jobs)
+        jobs.extend(new_jobs)
+
+        if len(cards) < min_cards:
+            break
+        _polite_sleep()
+
+    return jobs
+
+
+def _parse_liepin_browser_card(card, fallback_city: str) -> dict[str, Any] | None:
+    """Normalize a rendered Liepin result card into the project job schema."""
+    title_node = card.select_one(
+        'a[data-nick="job-detail-job-info"] .ellipsis-1[title], .job-title[title], h3[title]'
+    )
+    title = _clean_text(title_node.get("title", "") if title_node else "")
+    if not title:
+        title = _clean_text(_safe_text(card, ".job-title, h3, .ellipsis-1"))
+    if not title:
+        return None
+
+    link = card.select_one('a[data-nick="job-detail-job-info"], a[href*="/job/"]')
+    url = urljoin("https://www.liepin.com", link.get("href", "")) if link else ""
+    company_node = card.select_one('[data-nick="job-detail-company-info"] .ellipsis-1')
+    company = _clean_text(company_node.get_text(" ", strip=True) if company_node else "")
+    salary = _first_card_text(card, ".job-salary, .salary, .job-money")
+    location = _first_card_text(card, ".job-dq, .job-area, .job-location")
+    requirements = _first_card_text(card, ".job-require, .job-requirements")
+    text = _clean_text(card.get_text(" ", strip=True))
+
+    if not salary:
+        match = re.search(r"\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*[kK]|面议", text)
+        salary = _clean_text(match.group(0)) if match else ""
+    experience_match = re.search(r"\d+(?:\s*-\s*\d+)?年|经验不限|应届", requirements or text)
+    education_match = re.search(r"本科|硕士|博士|大专|学历不限", requirements or text)
+    skills = [
+        _clean_text(node.get_text(" ", strip=True))
+        for node in card.select(".tag-list span, .job-tags span")
+        if _clean_text(node.get_text(" ", strip=True))
+    ]
+    city = location or fallback_city
+    job_id = _stable_job_id("liepin", title, company, city, url)
+    jd_text = _build_jd_text(title, company, skills, requirements)
+
+    return {
+        "job_id": job_id,
+        "platform": "liepin",
+        "title": title,
+        "company": company,
+        "company_size": "",
+        "salary": salary,
+        "city": city,
+        "experience": experience_match.group(0) if experience_match else "",
+        "education": education_match.group(0) if education_match else "",
+        "skills": list(dict.fromkeys(skills)),
+        "jd_text": jd_text,
+        "responsibilities": requirements,
+        "requirements": requirements,
+        "is_big_tech": False,
+        "match_count": 0,
+        "crawled_at": datetime.now().strftime("%Y-%m-%d"),
+        "url": _clean_url(url),
+    }
+
+
+def crawl_zhilian_browser(keywords: list[str], city: str) -> list[dict[str, Any]]:
+    """Crawl public Zhilian (zhaopin) result pages through one normal browser session.
+
+    智联搜索页有 WAF 防护（Security Verification），纯 httpx 请求会被拦截；
+    使用 DrissionPage 真实浏览器渲染 + Cookie 注入可正常获取岗位列表。
+    """
+    browser_config = CRAWLER_CONFIG.get("zhilian_browser", {})
+    if not browser_config.get("enabled", True):
+        return []
+
+    try:
+        from DrissionPage import ChromiumPage
+    except ImportError as e:
+        raise ImportError("DrissionPage is required for Zhilian browser crawling") from e
+
+    page = ChromiumPage()
+    jobs: list[dict[str, Any]] = []
+    try:
+        for keyword in keywords:
+            if keyword.strip():
+                jobs.extend(_crawl_zhilian_browser_keyword(page, keyword.strip(), city))
+    finally:
+        try:
+            page.quit()
+        except Exception:  # noqa: BLE001
+            pass
+    return deduplicate_jobs(jobs)
+
+
+def _crawl_zhilian_browser_keyword(page, keyword: str, city: str) -> list[dict[str, Any]]:
+    """Crawl paginated Zhilian cards with Cookie injection; stop on repeat/empty pages."""
+    from bs4 import BeautifulSoup
+
+    browser_config = CRAWLER_CONFIG.get("zhilian_browser", {})
+    max_pages = browser_config.get("max_pages", CRAWLER_CONFIG["max_pages"])
+    render_wait = browser_config.get("render_wait_seconds", 3)
+    min_cards = browser_config.get("min_cards_per_page", 5)
+    cookie = CRAWLER_CONFIG["cookies"].get("zhilian", "")
+    jobs: list[dict[str, Any]] = []
+    seen_pages: set[tuple[str, ...]] = set()
+    seen_ids: set[str] = set()
+
+    for page_num in range(1, max_pages + 1):
+        url = (
+            "https://sou.zhaopin.com/?jl=530&kw="
+            f"{quote_plus(keyword)}&p={page_num}"
+        )
+        logger.info("Zhilian browser crawl: keyword=%s page=%d", keyword, page_num)
+        try:
+            page.get(url)
+            page.wait.doc_loaded()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Zhilian page load failed for keyword=%s page=%d: %s", keyword, page_num, e)
+            break
+        # 首次访问后注入 Cookie 并刷新，绕过 WAF 登录态校验
+        if cookie and page_num == 1:
+            try:
+                page.set.cookies(cookie)
+                page.refresh()
+                page.wait.doc_loaded()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Zhilian cookie injection failed: %s", e)
+        try:
+            page.wait.ele_displayed(ZHILIAN_CARD_SELECTOR, timeout=CRAWLER_CONFIG["timeout"])
+        except Exception:  # noqa: BLE001
+            logger.warning("Zhilian has no rendered cards for keyword=%s page=%d", keyword, page_num)
+            break
+
+        if render_wait:
+            page.wait(render_wait)
+        cards = BeautifulSoup(page.html, "lxml").select(ZHILIAN_CARD_SELECTOR)
+        page_jobs = [
+            job
+            for card in cards
+            if (job := _parse_zhilian_browser_card(card, city)) is not None
+        ]
+        page_signature = tuple(sorted(job["job_id"] for job in page_jobs))
+        if not page_jobs or page_signature in seen_pages:
+            logger.info("Zhilian page repeated or contained no jobs; stopping keyword=%s", keyword)
+            break
+        seen_pages.add(page_signature)
+
+        new_jobs = [job for job in page_jobs if job["job_id"] not in seen_ids]
+        if not new_jobs:
+            break
+        seen_ids.update(job["job_id"] for job in new_jobs)
+        jobs.extend(new_jobs)
+
+        if len(cards) < min_cards:
+            break
+        _polite_sleep()
+
+    return jobs
+
+
+def _parse_zhilian_browser_card(card, fallback_city: str) -> dict[str, Any] | None:
+    """Normalize a rendered Zhilian result card into the project job schema."""
+    title_node = card.select_one(".jobinfo__name")
+    title = _clean_text(title_node.get_text(" ", strip=True) if title_node else "")
+    if not title:
+        return None
+
+    link = card.select_one('.jobinfo__name[href], a[href*="/jobdetail/"]')
+    url = urljoin("https://www.zhaopin.com", link.get("href", "")) if link else ""
+    company_node = card.select_one(".companyinfo__name")
+    company = _clean_text(
+        company_node.get("title", "") or company_node.get_text(" ", strip=True)
+        if company_node else ""
+    )
+    info_items = [
+        _clean_text(node.get_text(" ", strip=True))
+        for node in card.select(".jobinfo__other-info-item")
+    ]
+    location = info_items[0] if info_items else ""
+    requirements = " ".join(info_items[1:])
+    salary = _first_card_text(card, ".jobinfo__salary, .salary, .job-money")
+    text = _clean_text(card.get_text(" ", strip=True))
+
+    if not salary:
+        match = re.search(r"\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*[kK万]|面议", text)
+        salary = _clean_text(match.group(0)) if match else ""
+    experience_match = re.search(r"\d+(?:\s*-\s*\d+)?年|经验不限|应届", requirements or text)
+    education_match = re.search(r"本科|硕士|博士|大专|学历不限", requirements or text)
+    skills = [
+        _clean_text(node.get_text(" ", strip=True))
+        for node in card.select(".joblist-box__item-tag")
+        if _clean_text(node.get_text(" ", strip=True))
+    ]
+    city = location or fallback_city
+    job_id = _stable_job_id("zhilian", title, company, city, url)
+    jd_text = _build_jd_text(title, company, skills, requirements)
+
+    return {
+        "job_id": job_id,
+        "platform": "zhilian",
+        "title": title,
+        "company": company,
+        "company_size": "",
+        "salary": salary,
+        "city": city,
+        "experience": experience_match.group(0) if experience_match else "",
+        "education": education_match.group(0) if education_match else "",
+        "skills": list(dict.fromkeys(skills)),
+        "jd_text": jd_text,
+        "responsibilities": requirements,
+        "requirements": requirements,
+        "is_big_tech": False,
+        "match_count": 0,
+        "crawled_at": datetime.now().strftime("%Y-%m-%d"),
+        "url": _clean_url(url),
+    }
+
+
+def _first_card_text(card, selector: str) -> str:
+    node = card.select_one(selector)
+    return _clean_text(node.get_text(" ", strip=True) if node else "")
+
+
+def _clean_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _clean_url(value: Any) -> str:
+    return "".join(str(value or "").split())
+
+
+def _stable_job_id(platform: str, title: str, company: str, city: str, url: str) -> str:
+    identity = _clean_url(url) or "|".join(
+        [_clean_text(title), _clean_text(company), _clean_text(city)]
+    )
+    digest = hashlib.md5(identity.encode("utf-8")).hexdigest()[:12]
+    return f"{platform}_{digest}"
 
 
 def _crawl_zhilian(keyword: str, city: str) -> list[dict[str, Any]]:
@@ -303,8 +693,37 @@ def _crawl_zhilian(keyword: str, city: str) -> list[dict[str, Any]]:
     )
 
 
+def _crawl_jobui(keyword: str, city: str) -> list[dict[str, Any]]:
+    """Crawl the public Jobui search result page using its configured selectors."""
+    return _crawl_configured_html_platform("jobui", keyword, city)
+
+
+def _crawl_51job(keyword: str, city: str) -> list[dict[str, Any]]:
+    """Crawl the public 51job search result page using its configured selectors."""
+    return _crawl_configured_html_platform("51job", keyword, city)
+
+
+def _crawl_configured_html_platform(
+    platform: str, keyword: str, city: str
+) -> list[dict[str, Any]]:
+    source = CRAWLER_CONFIG.get("html_sources", {}).get(platform)
+    if not source:
+        raise ValueError(f"No HTML source configuration for platform: {platform}")
+    return _httpx_html_crawl(
+        platform=platform,
+        search_url=source["search_url"],
+        keyword=keyword,
+        city=city,
+        page_param=source.get("page_param", "page"),
+    )
+
+
 def _httpx_html_crawl(
-    platform: str, search_url: str, keyword: str, city: str
+    platform: str,
+    search_url: str,
+    keyword: str,
+    city: str,
+    page_param: str = "page",
 ) -> list[dict[str, Any]]:
     """通用 httpx + BeautifulSoup HTML 解析骨架。
 
@@ -319,13 +738,19 @@ def _httpx_html_crawl(
     url = search_url.format(keyword=keyword)
     headers = dict(CRAWLER_CONFIG["headers"])
 
+    # 附加登录 Cookie（若已配置），绕过登录态校验
+    cookie = CRAWLER_CONFIG.get("cookies", {}).get(platform, "")
+    if cookie:
+        headers["Cookie"] = cookie
+        logger.info("平台 %s 已附加 Cookie（%d 字符）", platform, len(cookie))
+
     jobs: list[dict[str, Any]] = []
     with httpx.Client(
         headers=headers, timeout=CRAWLER_CONFIG["timeout"], follow_redirects=True
     ) as client:
         for page_num in range(1, CRAWLER_CONFIG["max_pages"] + 1):
             try:
-                resp = client.get(url, params={"page": page_num})
+                resp = client.get(url, params={page_param: page_num})
                 resp.raise_for_status()
             except Exception as e:  # noqa: BLE001
                 logger.warning("%s 第 %d 页请求失败: %s", platform, page_num, e)
@@ -355,33 +780,48 @@ def _parse_list_html(
             "缺少依赖 beautifulsoup4，请执行: pip install beautifulsoup4"
         ) from e
 
-    soup = BeautifulSoup(html, "lxml")
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception as e:  # lxml is an optional performance dependency.
+        logger.warning("lxml parser unavailable; using html.parser: %s", e)
+        soup = BeautifulSoup(html, "html.parser")
     jobs: list[dict[str, Any]] = []
 
-    # 各平台岗位卡片选择器（需根据实际页面结构调整）
+    source_config = CRAWLER_CONFIG.get("html_sources", {}).get(platform, {})
+    source_selectors = source_config.get("selectors", {})
+
+    # Each new public HTML source supplies selectors through CRAWLER_CONFIG.
     card_selectors = {
         "lagou": ".item__10RTO",
         "liepin": ".job-list-item",
         "zhilian": ".joblist-box__item",
     }
-    selector = card_selectors.get(platform, ".job-item")
+    selector = source_selectors.get("card", card_selectors.get(platform, ".job-item"))
+    title_selector = source_selectors.get("title", ".title, .job-title, h3")
+    company_selector = source_selectors.get("company", ".company, .company-name")
+    salary_selector = source_selectors.get("salary", ".salary, .money__3eAe5")
+    city_selector = source_selectors.get("city", ".city, .job-area, .job-location")
+    base_url = source_config.get("base_url", _platform_base_url(platform))
 
     for card in soup.select(selector):
         try:
-            title = _safe_text(card, ".title, .job-title, h3")
-            company = _safe_text(card, ".company, .company-name")
-            salary = _safe_text(card, ".salary, .money__3eAe5")
+            title = _safe_text(card, title_selector)
+            company = _safe_text(card, company_selector)
+            salary = _safe_text(card, salary_selector)
             if not title:
                 continue
+            link = card.select_one("a[href]")
+            url = urljoin(base_url, link.get("href", "")) if link else ""
+            job_city = _safe_text(card, city_selector) or city
             jobs.append(
                 {
-                    "job_id": f"{platform}_{hashlib.md5((title + company).encode()).hexdigest()[:12]}",
+                    "job_id": _stable_job_id(platform, title, company, job_city, url),
                     "platform": platform,
                     "title": title,
                     "company": company,
                     "company_size": "",
                     "salary": salary,
-                    "city": city,
+                    "city": job_city,
                     "experience": "",
                     "education": "",
                     "skills": [],
@@ -391,7 +831,7 @@ def _parse_list_html(
                     "is_big_tech": False,
                     "match_count": 0,
                     "crawled_at": datetime.now().strftime("%Y-%m-%d"),
-                    "url": "",
+                    "url": _clean_url(url),
                 }
             )
         except Exception as e:  # noqa: BLE001
@@ -403,7 +843,15 @@ def _parse_list_html(
 def _safe_text(element, selector: str) -> str:
     """安全提取元素内首个匹配选择器的文本。"""
     node = element.select_one(selector)
-    return node.get_text(strip=True) if node else ""
+    return _clean_text(node.get_text(" ", strip=True) if node else "")
+
+
+def _platform_base_url(platform: str) -> str:
+    return {
+        "lagou": "https://www.lagou.com",
+        "liepin": "https://www.liepin.com",
+        "zhilian": "https://sou.zhaopin.com",
+    }.get(platform, "")
 
 
 def crawl_job_detail(job_url: str, platform: str) -> dict[str, Any]:
@@ -467,6 +915,10 @@ def deduplicate_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
 
     for job in jobs:
+        job = dict(job)
+        for field in ("job_id", "title", "company", "city", "url"):
+            job[field] = _clean_url(job.get(field, "")) if field == "url" else _clean_text(job.get(field, ""))
+
         job_id = str(job.get("job_id", ""))
         # 同平台按 job_id 去重
         if job_id:
@@ -477,9 +929,9 @@ def deduplicate_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # 跨平台按 (title, company, city) 组合去重
         cross_key = "|".join(
             [
-                str(job.get("title", "")).strip().lower(),
-                str(job.get("company", "")).strip().lower(),
-                str(job.get("city", "")).strip(),
+                job["title"].lower(),
+                job["company"].lower(),
+                job["city"],
             ]
         )
         if cross_key != "||" and cross_key in seen_cross:
@@ -569,8 +1021,10 @@ def save_jobs(jobs: list[dict[str, Any]], tag: str = "") -> str:
     filename = f"jobs_{date_str}{suffix}.json"
     out_path = out_dir / filename
 
-    with open(out_path, "w", encoding="utf-8") as f:
+    temp_path = out_path.with_suffix(".json.tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(jobs, f, ensure_ascii=False, indent=2)
+    temp_path.replace(out_path)
 
     logger.info("岗位数据已存档: %s（%d 条）", out_path, len(jobs))
     return str(out_path)

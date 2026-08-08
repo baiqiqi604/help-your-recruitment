@@ -14,7 +14,9 @@ FastAPI Web 服务
 
 from __future__ import annotations
 
+import importlib.util
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -23,7 +25,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from config import PATH_CONFIG
+from config import LLM_CONFIG, PATH_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,31 @@ app = FastAPI(
     description="基于 LangGraph 的简历优化 Agent：Chat 对话 + 简历优化 + 岗位知识库检索",
     version="1.0.0",
 )
+
+RUNTIME_DEPENDENCIES = {
+    "langgraph": "langgraph",
+    "langchain_openai": "langchain-openai",
+    "chromadb": "chromadb",
+    "sentence_transformers": "sentence-transformers",
+    "bs4": "beautifulsoup4",
+    "httpx": "httpx",
+}
+
+
+def _runtime_status() -> dict[str, Any]:
+    missing = [
+        label for module, label in RUNTIME_DEPENDENCIES.items()
+        if importlib.util.find_spec(module) is None
+    ]
+    mock_enabled = os.getenv("MOCK_LLM", "").lower() in {
+        "1", "true", "yes"
+    }
+    llm_ready = mock_enabled or bool(LLM_CONFIG["api_key"])
+    return {
+        "status": "ok" if not missing and llm_ready else "degraded",
+        "llm_mode": "mock" if mock_enabled else ("configured" if llm_ready else "missing_api_key"),
+        "missing_dependencies": missing,
+    }
 
 
 # ──────────────────────────────────────────────
@@ -85,7 +112,11 @@ def chat(request: ChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="缺少用户消息内容")
 
     logger.info("/api/chat：session=%s 开始对话", session_id)
-    reply = chat_with_agent(user_input, session_id)
+    try:
+        reply = chat_with_agent(user_input, session_id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("/api/chat failed")
+        raise HTTPException(status_code=503, detail="对话服务暂时不可用") from e
     return {"reply": reply, "session_id": session_id}
 
 
@@ -119,10 +150,14 @@ def optimize(request: OptimizeRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="jd_text 与 job_id 至少提供其一")
 
     logger.info("/api/optimize：开始优化（简历 %d 字，JD %d 字）", len(resume_text), len(jd_text))
-    result = run_optimize(resume_text, jd_text)
+    try:
+        result = run_optimize(resume_text, jd_text)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("/api/optimize failed")
+        raise HTTPException(status_code=503, detail="简历优化服务暂时不可用") from e
 
     if result.get("error"):
-        raise HTTPException(status_code=500, detail=result["error"])
+        raise HTTPException(status_code=422, detail=result["error"])
 
     return {
         "optimized": result.get("optimized_text", ""),
@@ -159,9 +194,9 @@ def premium_jobs(limit: int = 50) -> dict[str, Any]:
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, Any]:
     """健康检查。"""
-    return {"status": "ok"}
+    return _runtime_status()
 
 
 if __name__ == "__main__":

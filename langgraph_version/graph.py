@@ -220,6 +220,14 @@ def write_output(state: OptimizeState) -> dict[str, Any]:
     return {}
 
 
+def route_after_stage(state: OptimizeState) -> str:
+    """Stop the graph immediately when an upstream stage reports an error."""
+    if state.get("error"):
+        logger.warning("Stage failed; stopping workflow: %s", state["error"])
+        return END
+    return "continue"
+
+
 # ──────────────────────────────────────────────
 # 条件边路由
 # ──────────────────────────────────────────────
@@ -270,10 +278,22 @@ def build_graph():
     # 入口
     graph.set_entry_point("load_resume")
 
-    # 普通边
-    graph.add_edge("load_resume", "analyze_jd")
-    graph.add_edge("analyze_jd", "optimize")
-    graph.add_edge("optimize", "review")
+    # Stop immediately after a failed stage instead of retrying with invalid state.
+    graph.add_conditional_edges(
+        "load_resume",
+        route_after_stage,
+        {"continue": "analyze_jd", END: END},
+    )
+    graph.add_conditional_edges(
+        "analyze_jd",
+        route_after_stage,
+        {"continue": "optimize", END: END},
+    )
+    graph.add_conditional_edges(
+        "optimize",
+        route_after_stage,
+        {"continue": "review", END: END},
+    )
 
     # 条件边：review → (write_output | optimize | END)
     graph.add_conditional_edges(

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import tempfile
@@ -175,6 +176,16 @@ def cmd_optimize(args: argparse.Namespace) -> None:
     print(f"\n已保存: {out_path}")
 
 
+def cmd_doctor(_args: argparse.Namespace) -> None:
+    """Check dependencies, LLM configuration, and persisted crawl data."""
+    from validate_runtime import collect_diagnostics
+
+    report = collect_diagnostics()
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if not report["ready"]:
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
@@ -191,6 +202,8 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument(
         "--session", type=str, default="", help="会话 ID（缺省自动生成，实现多轮记忆）"
     )
+
+    subparsers.add_parser("doctor", help="检查运行依赖、LLM 配置与岗位数据")
 
     # optimize
     opt_parser = subparsers.add_parser("optimize", help="一次性简历优化")
@@ -211,6 +224,7 @@ def main() -> None:
         "web": cmd_web,
         "chat": cmd_chat,
         "optimize": cmd_optimize,
+        "doctor": cmd_doctor,
     }
     try:
         handlers[args.command](args)

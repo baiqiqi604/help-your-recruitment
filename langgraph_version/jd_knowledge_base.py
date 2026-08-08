@@ -54,6 +54,11 @@ class BGEEmbeddingFunction:
         logger.info("加载 Embedding 模型: %s (device=%s)", model_name, device)
         self._model = SentenceTransformer(model_name, device=device)
 
+    @staticmethod
+    def name() -> str:
+        """chromadb EmbeddingFunction 协议要求：返回该 embedding 函数名。"""
+        return "bge-zh"
+
     def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
         """将文本列表转为向量列表。"""
         # BGE 模型推荐对 query 加前缀，但入库文本不加；这里统一不加，检索时也不加
@@ -61,6 +66,11 @@ class BGEEmbeddingFunction:
             input, normalize_embeddings=True, show_progress_bar=False
         )
         return embeddings.tolist()
+
+    def embed_query(self, input: str | list[str]) -> list[float] | list[list[float]]:
+        """chromadb query 时调用；入参可能是单个字符串或字符串列表。"""
+        texts = [input] if isinstance(input, str) else list(input)
+        return self(texts)
 
 
 @lru_cache(maxsize=1)

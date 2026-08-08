@@ -108,21 +108,77 @@ PATH_CONFIG = {
 # 爬虫配置
 # ──────────────────────────────────────────────
 CRAWLER_CONFIG = {
-    "platforms": ["boss", "lagou", "liepin", "zhilian"],
+    "platforms": ["boss", "lagou", "liepin", "zhilian", "jobui", "51job"],
     "default_city": "全国",
     "keywords": [
         "Python", "Java", "前端", "产品经理", "数据分析",
         "算法工程师", "测试", "运维", "UI设计", "运营",
     ],
-    "request_interval": 3,   # 秒，避免触发反爬
-    "max_pages": 3,
-    "timeout": 30,
+    "request_interval": float(os.getenv("CRAWLER_REQUEST_INTERVAL", "3")),
+    "max_pages": int(os.getenv("CRAWLER_MAX_PAGES", "3")),
+    "timeout": int(os.getenv("CRAWLER_TIMEOUT", "30")),
+    "liepin_browser": {
+        "enabled": os.getenv("LIEPIN_BROWSER_ENABLED", "1") != "0",
+        "max_pages": int(os.getenv("LIEPIN_BROWSER_MAX_PAGES", "5")),
+        "render_wait_seconds": float(
+            os.getenv("LIEPIN_BROWSER_RENDER_WAIT_SECONDS", "2")
+        ),
+        "min_cards_per_page": int(
+            os.getenv("LIEPIN_BROWSER_MIN_CARDS_PER_PAGE", "5")
+        ),
+    },
+    "zhilian_browser": {
+        "enabled": os.getenv("ZHILIAN_BROWSER_ENABLED", "1") != "0",
+        "max_pages": int(os.getenv("ZHILIAN_BROWSER_MAX_PAGES", "3")),
+        "render_wait_seconds": float(
+            os.getenv("ZHILIAN_BROWSER_RENDER_WAIT_SECONDS", "3")
+        ),
+        "min_cards_per_page": int(
+            os.getenv("ZHILIAN_BROWSER_MIN_CARDS_PER_PAGE", "5")
+        ),
+    },
+    # Public HTML search sources. Add a source here to reuse the generic
+    # paginated parser without adding another standalone crawler script.
+    "html_sources": {
+        "jobui": {
+            "search_url": "https://www.jobui.com/jobs?keyword={keyword}",
+            "base_url": "https://www.jobui.com",
+            "page_param": "page",
+            "selectors": {
+                "card": ".job-item, .job-list-item, .job-list-item__content",
+                "title": ".job-name, .job-title, h3, h2",
+                "company": ".company-name, .company, .c-name",
+                "salary": ".salary, .job-salary, .money",
+                "city": ".job-area, .city, .job-location",
+            },
+        },
+        "51job": {
+            "search_url": "https://we.51job.com/pc/search?keyword={keyword}",
+            "base_url": "https://we.51job.com",
+            "page_param": "pageNo",
+            "selectors": {
+                "card": ".joblist-item, .job-item, article.job-item",
+                "title": ".job-title, .jname, h3, h2",
+                "company": ".company-name, .cname, .company",
+                "salary": ".salary, .sal, .job-salary",
+                "city": ".job-area, .work-area, .city",
+            },
+        },
+    },
     "headers": {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         ),
+    },
+    # 各平台登录 Cookie（从 .env 注入，绕过反爬登录态校验）
+    "cookies": {
+        "lagou": os.getenv("COOKIE_LAGOU", ""),
+        "liepin": os.getenv("COOKIE_LIEPIN", ""),
+        "zhilian": os.getenv("COOKIE_ZHILIAN", ""),
+        "jobui": os.getenv("COOKIE_JOBUI", ""),
+        "51job": os.getenv("COOKIE_51JOB", ""),
     },
 }
 
@@ -158,6 +214,29 @@ WEB_CONFIG = {
 # ──────────────────────────────────────────────
 # 汇总导出
 # ──────────────────────────────────────────────
+_DEFAULT_EXTRA_CRAWLER_KEYWORDS = ["Go", "C++", "人工智能", "数据开发", "网络安全"]
+_ENV_EXTRA_CRAWLER_KEYWORDS = [
+    keyword.strip()
+    for keyword in os.getenv("CRAWLER_EXTRA_KEYWORDS", "").split(",")
+    if keyword.strip()
+]
+_ENV_EXTRA_CRAWLER_PLATFORMS = [
+    platform.strip()
+    for platform in os.getenv("CRAWLER_EXTRA_PLATFORMS", "").split(",")
+    if platform.strip()
+]
+CRAWLER_CONFIG["keywords"] = list(
+    dict.fromkeys(
+        CRAWLER_CONFIG["keywords"]
+        + _DEFAULT_EXTRA_CRAWLER_KEYWORDS
+        + _ENV_EXTRA_CRAWLER_KEYWORDS
+    )
+)
+CRAWLER_CONFIG["platforms"] = list(
+    dict.fromkeys(CRAWLER_CONFIG["platforms"] + _ENV_EXTRA_CRAWLER_PLATFORMS)
+)
+
+
 CONFIG = {
     "llm": LLM_CONFIG,
     "embedding": EMBEDDING_CONFIG,

@@ -76,6 +76,16 @@ class BGEEmbeddingFunction(EmbeddingFunction):
         )
         return vectors.tolist()
 
+    @staticmethod
+    def name() -> str:
+        """chromadb EmbeddingFunction 协议要求：返回该 embedding 函数名。"""
+        return "bge-zh"
+
+    def embed_query(self, input: str | list[str]) -> list[float] | list[list[float]]:
+        """chromadb query 时调用；入参可能是单个字符串或字符串列表。"""
+        texts = [input] if isinstance(input, str) else list(input)
+        return self(texts)
+
 
 # ──────────────────────────────────────────────
 # ChromaDB 客户端与集合（懒初始化）

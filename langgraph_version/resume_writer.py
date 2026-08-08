@@ -105,12 +105,17 @@ def _replace_paragraph_text(paragraph, new_text: str) -> None:
 def docx_to_pdf(docx_path: str, pdf_path: str) -> None:
     """Word 转 PDF（可选功能）。
 
-    注意：docx2pdf 在 Windows 上依赖 Microsoft Word，
-    在 macOS 上依赖 Microsoft Word，Linux 不支持。
+    转换策略：优先 docx2pdf（需本机 Microsoft Word，格式最保真）；
+    未安装或转换失败时回退 pdf2docx 内置 Converter（纯 Python 实现，无需 Word）。
 
     Args:
         docx_path: 输入 Word 文件路径
         pdf_path: 输出 PDF 文件路径
+
+    Raises:
+        FileNotFoundError: 输入 Word 文件不存在
+        ImportError: docx2pdf 与 pdf2docx 均不可用
+        ValueError: 转换未产出 PDF 文件
     """
     if not Path(docx_path).exists():
         raise FileNotFoundError(f"Word 文件不存在: {docx_path}")
@@ -118,19 +123,38 @@ def docx_to_pdf(docx_path: str, pdf_path: str) -> None:
     # 确保输出目录存在
     Path(pdf_path).parent.mkdir(parents=True, exist_ok=True)
 
+    # 优先 docx2pdf（依赖 MS Word，保真度高）
     try:
         from docx2pdf import convert
+
+        logger.info("开始转换 Word -> PDF（docx2pdf）: %s", docx_path)
+        convert(docx_path, pdf_path)
+        if Path(pdf_path).exists():
+            logger.info("PDF 导出完成: %s", pdf_path)
+            return
+        logger.warning("docx2pdf 未产出文件，回退 pdf2docx")
+    except ImportError:
+        logger.warning("docx2pdf 未安装，回退 pdf2docx")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("docx2pdf 转换失败（%s），回退 pdf2docx", e)
+
+    # 回退 pdf2docx（无需 Word）
+    try:
+        from pdf2docx import Converter
     except ImportError as e:
         raise ImportError(
-            "缺少依赖 docx2pdf，请执行: pip install docx2pdf"
-            "（需本地安装 Microsoft Word）"
+            "缺少 PDF 导出依赖，请执行: pip install pdf2docx"
         ) from e
 
-    logger.info("开始转换 Word -> PDF: %s", docx_path)
-    convert(docx_path, pdf_path)
+    logger.info("开始转换 Word -> PDF（pdf2docx）: %s", docx_path)
+    converter = Converter(docx_path)
+    try:
+        converter.convert(pdf_path)
+    finally:
+        converter.close()
 
     if not Path(pdf_path).exists():
-        raise ValueError("PDF 导出失败，请确认本地已安装 Microsoft Word")
+        raise ValueError("PDF 导出失败，docx2pdf 与 pdf2docx 均未产出文件")
     logger.info("PDF 导出完成: %s", pdf_path)
 
 

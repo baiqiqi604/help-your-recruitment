@@ -1,13 +1,4 @@
-"""
-定时爬取调度器
-
-职责：
-1. 使用 APScheduler 实现每日定时爬取
-2. 按预设关键词列表逐个爬取
-3. 爬取结果存档 + 增量更新知识库
-
-依赖：APScheduler
-"""
+"""Scheduled job crawling and knowledge-base updates."""
 
 from __future__ import annotations
 
@@ -15,83 +6,51 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from config import SCHEDULER_CONFIG, CRAWLER_CONFIG, PATH_CONFIG
+from config import CRAWLER_CONFIG, SCHEDULER_CONFIG
 
 logger = logging.getLogger(__name__)
 
 
 def daily_crawl_task() -> dict[str, Any]:
-    """每日爬取任务：按预设关键词列表逐个爬取。
-
-    Returns:
-        爬取统计信息：
-        {
-            "total_jobs": int,
-            "by_platform": {...},
-            "saved_path": str,
-            "finished_at": str
-        }
-    """
-    from jd_crawler import crawl_jobs, save_jobs
+    """Crawl all configured keywords and update the local job knowledge base."""
+    from jd_crawler import crawl_jobs_batch, save_jobs
 
     keywords = CRAWLER_CONFIG["keywords"]
     city = CRAWLER_CONFIG["default_city"]
+    try:
+        jobs = crawl_jobs_batch(keywords, city)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Batch crawl failed: %s", e)
+        jobs = []
 
-    all_jobs: list[dict[str, Any]] = []
     by_platform: dict[str, int] = {}
+    for job in jobs:
+        platform = str(job.get("platform", "unknown"))
+        by_platform[platform] = by_platform.get(platform, 0) + 1
 
-    for keyword in keywords:
-        logger.info("正在爬取关键词: %s", keyword)
-        try:
-            jobs = crawl_jobs(keyword, city)
-            all_jobs.extend(jobs)
-            # 统计各平台数量
-            for job in jobs:
-                platform = job.get("platform", "unknown")
-                by_platform[platform] = by_platform.get(platform, 0) + 1
-        except Exception as e:  # noqa: BLE001
-            logger.warning("关键词 %s 爬取失败: %s", keyword, e)
-
-    # 跨关键词统一去重
-    from jd_crawler import deduplicate_jobs, mark_premium_jobs
-
-    all_jobs = mark_premium_jobs(deduplicate_jobs(all_jobs))
-
-    # 存档到 data/crawled_jobs（按日期命名 JSON）
-    saved_path = ""
-    if all_jobs:
-        saved_path = save_jobs(all_jobs, tag="daily")
-
-    # 增量更新知识库
+    saved_path = save_jobs(jobs, tag="daily") if jobs else ""
     try:
         from jd_knowledge_base import increment_update
 
-        increment_update(all_jobs)
+        increment_update(jobs)
     except Exception as e:  # noqa: BLE001
-        logger.warning("知识库增量更新失败: %s", e)
-
-    finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    logger.info(
-        "每日爬取完成：共 %d 个岗位，各平台 %s",
-        len(all_jobs),
-        by_platform,
-    )
+        logger.warning("Knowledge base update failed: %s", e)
 
     return {
-        "total_jobs": len(all_jobs),
+        "total_jobs": len(jobs),
         "by_platform": by_platform,
         "saved_path": saved_path,
-        "finished_at": finished_at,
+        "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
 def start_scheduler() -> None:
-    """启动定时调度器（后台运行，阻塞主线程）。"""
+    """Start the blocking daily scheduler."""
     try:
         from apscheduler.schedulers.blocking import BlockingScheduler
     except ImportError as e:
         raise ImportError(
-            "缺少依赖 APScheduler，请执行: pip install APScheduler"
+            "APScheduler is required; install it with: pip install APScheduler"
         ) from e
 
     scheduler = BlockingScheduler()
@@ -104,30 +63,28 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     logger.info(
-        "定时调度器已启动：每日 %02d:%02d 执行爬取",
+        "Scheduler started: daily crawl at %02d:%02d",
         SCHEDULER_CONFIG["hour"],
         SCHEDULER_CONFIG["minute"],
     )
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
-        logger.info("调度器已停止")
+        logger.info("Scheduler stopped")
 
 
 def run_once() -> dict[str, Any]:
-    """手动触发一次爬取任务（用于测试）。"""
+    """Trigger one crawl immediately, useful for manual verification."""
     return daily_crawl_task()
 
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    import sys
 
-    # 用法：python scheduler.py [once|daemon]
     mode = sys.argv[1] if len(sys.argv) > 1 else "once"
     if mode == "daemon":
         start_scheduler()

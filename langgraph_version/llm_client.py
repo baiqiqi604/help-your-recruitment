@@ -72,7 +72,16 @@ def _mock_chat(prompt: str, system: str | None = None) -> str:
             ],
             ensure_ascii=False,
         )
-    # 3. 简历优化（content_optimizer.optimize_resume_content）
+    # 3. Resume quality review (graph.review)
+    if "严格的简历审核专家" in prompt and '"pass"' in prompt:
+        return json.dumps(
+            {
+                "pass": True,
+                "feedback": "MOCK 审核通过：输出结构完整，未发现明显虚构内容。",
+            },
+            ensure_ascii=False,
+        )
+    # 4. 简历优化（content_optimizer.optimize_resume_content）
     if "优化后的简历" in prompt or "简历优化顾问" in prompt:
         return (
             "张三 | 13800001234 | zhangsan@example.com | 北京\n\n"
@@ -99,7 +108,7 @@ def _mock_chat(prompt: str, system: str | None = None) -> str:
             "- CET-6\n"
             "\n（本条为 MOCK 演示输出，配置真实 API Key 后由模型生成）"
         )
-    # 4. 其他（Agent 对话等）
+    # 5. 其他（Agent 对话等）
     return "（MOCK）你好，我是简历优化助手。当前为演示模式，配置 API Key 后可提供真实分析与优化服务。"
 
 

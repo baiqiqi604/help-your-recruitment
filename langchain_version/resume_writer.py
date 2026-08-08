@@ -141,30 +141,60 @@ def write_optimized_resume(text: str, out_docx: str | Path) -> str:
 
 
 def docx_to_pdf(docx_path: str | Path, pdf_path: str | Path) -> str:
-    """将 docx 文件转换为 PDF（docx2pdf，依赖本机 Word）。
+    """将 docx 文件转换为 PDF。
+
+    转换策略：优先 docx2pdf（需本机 MS Word，格式最保真）；
+    未安装或转换失败时回退 pdf2docx 内置 Converter（纯 Python 实现，无需 Word）。
 
     Args:
         docx_path: 源 docx 路径
         pdf_path: 输出 pdf 路径
 
     Returns:
-        PDF 路径；转换失败（如未安装 MS Word）时记 warning 并返回 ""。
+        PDF 路径；docx2pdf 与 pdf2docx 均失败时记 warning 并返回 ""。
     """
     src = Path(docx_path)
     dst = Path(pdf_path)
     if not src.exists():
         raise ValueError(f"docx 文件不存在: {src}")
 
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    # 优先 docx2pdf（依赖 MS Word，保真度高）
     try:
         from docx2pdf import convert
 
-        dst.parent.mkdir(parents=True, exist_ok=True)
         convert(str(src), str(dst))
-        logger.info("docx 转 PDF 完成: %s", dst)
-        return str(dst)
+        if dst.exists():
+            logger.info("docx 转 PDF 完成（docx2pdf）: %s", dst)
+            return str(dst)
+        logger.warning("docx2pdf 未产出文件，回退 pdf2docx")
+    except ImportError:
+        logger.warning("docx2pdf 未安装，回退 pdf2docx")
     except Exception as e:  # noqa: BLE001
-        logger.warning("docx 转 PDF 失败（可能需要安装 MS Word）: %s", e)
+        logger.warning("docx2pdf 转换失败（%s），回退 pdf2docx", e)
+
+    # 回退 pdf2docx（无需 Word）
+    try:
+        from pdf2docx import Converter
+    except ImportError:
+        logger.warning("pdf2docx 也未安装，无法导出 PDF")
         return ""
+
+    converter = Converter(str(src))
+    try:
+        converter.convert(str(dst))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pdf2docx 转换失败: %s", e)
+        return ""
+    finally:
+        converter.close()
+
+    if not dst.exists():
+        logger.warning("docx 转 PDF 失败（docx2pdf 与 pdf2docx 均未产出文件）")
+        return ""
+    logger.info("docx 转 PDF 完成（pdf2docx）: %s", dst)
+    return str(dst)
 
 
 if __name__ == "__main__":
