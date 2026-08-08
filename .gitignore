@@ -21,3 +21,7 @@ web_err.log
 **/data/crawled_jobs/*
 **/data/raw/*
 !**/data/**/.gitkeep
+
+# ── 输出产物目录(保留 .gitkeep)──
+**/output/*
+!**/output/**/.gitkeep
