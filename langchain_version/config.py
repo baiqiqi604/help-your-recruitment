@@ -87,8 +87,13 @@ EMBEDDING_CONFIG = {
 # ──────────────────────────────────────────────
 # 向量数据库配置（ChromaDB）
 # ──────────────────────────────────────────────
+# RAG 与 langgraph 版共享同一向量库（interview_kb 等集合），避免重复建库
+_SHARED_CHROMA_DIR = BASE_DIR.parent / "langgraph_version" / "data" / "chroma_db"
+if not _SHARED_CHROMA_DIR.exists():
+    _SHARED_CHROMA_DIR = BASE_DIR / "data" / "chroma_db"
+
 CHROMA_CONFIG = {
-    "persist_directory": str(BASE_DIR / "data" / "chroma_db"),
+    "persist_directory": str(_SHARED_CHROMA_DIR),
     "collection_fulltext": "jd_fulltext",   # 岗位全文 JD
     "collection_premium": "jd_premium",     # 大厂 + 高频岗位
 }
