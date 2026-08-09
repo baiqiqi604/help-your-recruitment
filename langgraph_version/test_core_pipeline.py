@@ -21,6 +21,7 @@ class CorePipelineTests(unittest.TestCase):
         state = {
             "resume_text": "Candidate with Python, Django, MySQL, and Redis experience.",
             "jd_text": "Python backend engineer; Django, MySQL, Redis, and Docker required.",
+            "target_company": "Mock Company Ltd.",
             "attempts": 0,
         }
         state.update(load_resume(state))

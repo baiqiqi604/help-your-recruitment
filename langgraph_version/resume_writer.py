@@ -158,5 +158,141 @@ def docx_to_pdf(docx_path: str, pdf_path: str) -> None:
     logger.info("PDF 导出完成: %s", pdf_path)
 
 
+# ──────────────────────────────────────────────
+# 定制化简历 / 面试建议 Word 文档生成（依据《定制化简历大师》Skill）
+# ──────────────────────────────────────────────
+def write_customized_resume(optimized_text: str, output_docx: str) -> str:
+    """将优化后的简历文本生成为新的 Word 文档（不修改用户原始文件）。
+
+    Args:
+        optimized_text: 优化后的简历全文
+        output_docx: 输出 docx 路径
+
+    Returns:
+        输出 docx 绝对路径
+
+    Raises:
+        ValueError: 简历文本为空
+    """
+    if not optimized_text or not optimized_text.strip():
+        raise ValueError("简历文本不能为空")
+
+    out = Path(output_docx)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
+    except ImportError as e:
+        raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "微软雅黑"
+    normal.font.size = Pt(10.5)
+
+    lines = [line.rstrip() for line in optimized_text.splitlines()]
+    section_title = ("姓名", "联系方式", "求职目标", "个人摘要", "核心技能",
+                     "工作经历", "项目经历", "教育背景", "证书", "奖项", "其他")
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        para = doc.add_paragraph()
+        run = para.add_run(stripped)
+        if any(stripped.startswith(prefix) for prefix in section_title) and len(stripped) <= 30:
+            run.bold = True
+            run.font.size = Pt(13)
+            para.paragraph_format.space_before = Pt(8)
+            para.paragraph_format.space_after = Pt(3)
+        else:
+            para.paragraph_format.space_after = Pt(2)
+
+    doc.save(str(out))
+    logger.info("定制化简历已保存: %s", out)
+    return str(out)
+
+
+def write_interview_advice_docx(advice_text: str, output_docx: str) -> str:
+    """将面试建议（Markdown 文本）渲染为 Word 文档。
+
+    支持 # / ## / ### 标题、- 无序列表、1. 有序列表、普通段落。
+
+    Args:
+        advice_text: 面试建议 Markdown 文本（来自 interview_advisor.build_interview_advice）
+        output_docx: 输出 docx 路径
+
+    Returns:
+        输出 docx 绝对路径
+
+    Raises:
+        ValueError: 面试建议文本为空
+    """
+    if not advice_text or not advice_text.strip():
+        raise ValueError("面试建议文本不能为空")
+
+    out = Path(output_docx)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
+    except ImportError as e:
+        raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "微软雅黑"
+    normal.font.size = Pt(10.5)
+
+    for line in advice_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if stripped.startswith("### "):
+            para = doc.add_paragraph()
+            run = para.add_run(stripped[4:])
+            run.bold = True
+            run.font.size = Pt(12)
+            para.paragraph_format.space_before = Pt(10)
+            para.paragraph_format.space_after = Pt(3)
+        elif stripped.startswith("## "):
+            para = doc.add_paragraph()
+            run = para.add_run(stripped[3:])
+            run.bold = True
+            run.font.size = Pt(14)
+            para.paragraph_format.space_before = Pt(14)
+            para.paragraph_format.space_after = Pt(4)
+        elif stripped.startswith("# "):
+            para = doc.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = para.add_run(stripped[2:])
+            run.bold = True
+            run.font.size = Pt(16)
+            para.paragraph_format.space_after = Pt(10)
+        elif stripped.startswith("- ") or stripped.startswith("• "):
+            para = doc.add_paragraph()
+            para.paragraph_format.left_indent = Pt(18)
+            para.paragraph_format.space_after = Pt(2)
+            para.add_run("• " + stripped.lstrip("-• ").strip())
+        elif stripped[0].isdigit() and ". " in stripped[:4]:
+            para = doc.add_paragraph()
+            para.paragraph_format.left_indent = Pt(18)
+            para.paragraph_format.space_after = Pt(2)
+            para.add_run(stripped)
+        else:
+            para = doc.add_paragraph()
+            para.paragraph_format.space_after = Pt(2)
+            para.add_run(stripped)
+
+    doc.save(str(out))
+    logger.info("面试建议已保存: %s", out)
+    return str(out)
+
+
 if __name__ == "__main__":
     print("resume_writer 模块自测：需要传入实际文件路径")

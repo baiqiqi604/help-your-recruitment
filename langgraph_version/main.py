@@ -132,7 +132,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
 
 
 def cmd_optimize(args: argparse.Namespace) -> None:
-    """命令行一次性简历优化。"""
+    """命令行一次性简历定制优化（依据《定制化简历大师》Skill）。"""
     from graph import run_optimize
 
     print("读取简历中...")
@@ -143,18 +143,26 @@ def cmd_optimize(args: argparse.Namespace) -> None:
     jd_text = _load_jd_text(args.jd, args.job_id)
     print(f"  JD 文本 {len(jd_text)} 字")
 
-    print("执行 LangGraph 优化流水线...")
-    result = run_optimize(resume_text, jd_text)
+    target_company = (args.company or "").strip()
+    if not target_company:
+        print("❌ 请提供 --company 目标公司名称")
+        sys.exit(1)
+
+    print("执行 LangGraph 定制流水线（拆解岗位 → 公司分析 → 优化 → 审核 → 面试建议）...")
+    result = run_optimize(resume_text, jd_text, target_company=target_company)
 
     if result.get("error"):
-        print(f"❌ 优化失败: {result['error']}")
+        print(f"❌ 定制失败: {result['error']}")
         sys.exit(1)
 
     optimized = result.get("optimized_text", "")
     matching_table = result.get("matching_table", [])
+    interview_questions = result.get("interview_questions", [])
+    resume_docx = result.get("resume_docx_path", "")
+    advice_docx = result.get("advice_docx_path", "")
 
     print("\n" + "=" * 60)
-    print("✅ 优化完成")
+    print("✅ 定制完成")
     print("=" * 60)
     print(optimized)
 
@@ -164,10 +172,22 @@ def cmd_optimize(args: argparse.Namespace) -> None:
             if isinstance(row, dict):
                 print(
                     f"- {row.get('jd_requirement', '')} "
-                    f"[{row.get('match_strength', '')}]"
+                    f"[{row.get('match_strength', '')}] "
+                    f"→ {row.get('resume_position', '')}"
                 )
 
-    # 存档优化结果
+    if interview_questions:
+        print("\n【面试问题清单】")
+        for q in interview_questions:
+            if isinstance(q, dict):
+                print(f"- [{q.get('stage', '')}] {q.get('question', '')}")
+
+    if resume_docx:
+        print(f"\n📄 定制化简历（Word）: {resume_docx}")
+    if advice_docx:
+        print(f"🎯 面试建议（Word）: {advice_docx}")
+
+    # 存档优化结果（纯文本兜底）
     out_dir = Path(PATH_CONFIG["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -206,10 +226,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("doctor", help="检查运行依赖、LLM 配置与岗位数据")
 
     # optimize
-    opt_parser = subparsers.add_parser("optimize", help="一次性简历优化")
+    opt_parser = subparsers.add_parser("optimize", help="一次性简历定制优化")
     opt_parser.add_argument("--resume", type=str, required=True, help="简历文件路径（.pdf/.docx/.txt）")
     opt_parser.add_argument("--jd", type=str, default="", help="JD 文本文件路径")
     opt_parser.add_argument("--job-id", type=str, default="", help="岗位知识库中的岗位 ID（与 --jd 二选一）")
+    opt_parser.add_argument("--company", type=str, default="", help="目标公司名称（必填，用于公司分析/求职判断/面试建议）")
 
     return parser
 
