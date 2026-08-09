@@ -1,11 +1,17 @@
 """
-LangChain Tool-calling Agent 模块（核心）
+LangChain Tool-calling Agent 模块（RAG 优先答疑模式）
 
 职责：
-1. 组合 岗位检索 / 优质岗位 / 岗位分析 / 简历优化 四个工具
+1. 组合 答疑检索 / 岗位分析 / 简历优化 三个工具
 2. 用 create_tool_calling_agent 构建 Tool-calling Agent
 3. 会话级记忆 ConversationBufferMemory（按 session_id 缓存）
 4. 导出 get_agent() 单例 与 chat_with_agent() 对话入口
+
+答疑流程（RAG 优先）：
+    用户提问 → 先检索面试/笔试经验知识库（answer_from_kb）
+    → 命中：整理参考答案回答 + 推荐 5 道相关题目
+    → 未命中：大模型直接回答，注明"题库暂无收录，以下为模型回答"
+简历/JD 相关请求走 analyze_jd / optimize_resume。
 
 依赖：langchain、langchain-openai（经 llm_client）
 """
@@ -23,58 +29,51 @@ from langchain.tools import tool
 
 import content_optimizer
 import jd_analyzer
-import jd_knowledge_base
 import llm_client
 
 logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
-# 系统提示词
+# 系统提示词（RAG 优先答疑）
 # ──────────────────────────────────────────────
-SYSTEM_PROMPT = """你是一位专业的「简历优化 + 求职」智能 Agent。
+SYSTEM_PROMPT = """你是一位专业的求职答疑助手，服务求职者与面试准备者。回答用户问题时遵循以下流程：
 
-你拥有以下能力：
-1. search_jds_tool：在岗位知识库中按语义检索岗位
-2. get_premium_jobs_tool：获取优质岗位（大厂或高频）列表
-3. analyze_jd_tool：分析岗位描述，提取技能 / 职责 / 经验要求
-4. optimize_resume_tool：根据岗位分析结果优化简历内容
+【答疑流程】
+1. 用户提出问题时，**优先调用 answer_from_kb 工具**，从面试/笔试经验知识库检索相关内容。
+2. 如果题库有命中（检索结果非空）：
+   - 基于命中的参考答案，用通俗清晰的语言整理回答用户的问题。
+   - 回答末尾**推荐 5 道相关题目**（从命中的题目中挑选，列出题目名称，可附简要考察点）。
+3. 如果题库未命中（检索结果为空）：
+   - 直接用你自身的大模型知识回答用户问题。
+   - 回答开头注明「本题库暂无收录，以下为模型回答」。
+4. 如果用户请求与简历优化 / 岗位分析相关（如"帮我改简历""分析这段 JD"），
+   则调用 analyze_jd / optimize_resume 工具处理，不套用答疑流程。
 
-回答要求：
-- 全程使用中文，语气专业、友好、简洁
-- 检索岗位时，主动总结岗位要点（公司、薪资、城市、平台、JD 摘要）
-- 优化简历时，先说明优化思路与要点，再给出优化后的简历全文
-- 不要编造工具返回之外的信息；不确定时明确说明"""
+【回答要求】
+- 回答准确、克制、结构化，必要时用列表分点。
+- 引用题库内容时基于检索结果，不要编造题目或答案。
+- 推荐题目仅从检索命中的题目中选择。
+- 不确定的内容明确说明。"""
 
 
 # ──────────────────────────────────────────────
 # 工具定义
 # ──────────────────────────────────────────────
 @tool
-def search_jds_tool(query: str, top_k: int = 5) -> list[dict[str, Any]]:
-    """在岗位知识库中按语义检索岗位。
+def answer_from_kb(question: str, top_k: int = 5) -> list[dict[str, Any]]:
+    """从面试/笔试经验知识库（RAG）检索与 question 相关的题目及答案。
 
-    Args:
-        query: 检索关键词（如 "Python 后端 北京"）
-        top_k: 返回条数（默认 5）
-
-    Returns:
-        岗位列表（含 id/title/company/city/salary/jd_text/url/platform）
+    用于回答用户提出的面试/求职/技术类问题：先查题库看是否已有收录，
+    命中则返回题目、参考答案、考察点，供整理回答与推荐相关题目。
     """
-    return jd_knowledge_base.search_jds(query, top_k=top_k)
+    from interview_knowledge_base import search_questions
 
-
-@tool
-def get_premium_jobs_tool(limit: int = 20) -> list[dict[str, Any]]:
-    """获取优质岗位列表（大厂或高频岗位）。
-
-    Args:
-        limit: 返回条数（默认 20）
-
-    Returns:
-        优质岗位列表
-    """
-    return jd_knowledge_base.get_premium_jobs(limit=limit)
+    try:
+        return search_questions(question, top_k=top_k, max_distance=0.6)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("answer_from_kb 检索失败: %s", e)
+        return []
 
 
 @tool
@@ -106,8 +105,7 @@ def optimize_resume_tool(resume_text: str, jd_analysis: dict[str, Any]) -> str:
 
 
 TOOLS = [
-    search_jds_tool,
-    get_premium_jobs_tool,
+    answer_from_kb,
     analyze_jd_tool,
     optimize_resume_tool,
 ]
@@ -142,7 +140,7 @@ def get_agent():
     prompt = _build_prompt()
     agent = create_tool_calling_agent(llm, TOOLS, prompt)
     logger.info(
-        "Tool-calling Agent 已创建（provider=%s model=%s）",
+        "RAG 优先答疑 Tool-calling Agent 已创建（provider=%s model=%s）",
         llm_client.LLM_CONFIG["provider"],
         llm_client.LLM_CONFIG["model_name"],
     )
@@ -206,4 +204,4 @@ def chat_with_agent(user_input: str, session_id: str) -> str:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print(chat_with_agent("你好，请帮我推荐 3 个 Python 后端岗位", "demo"))
+    print(chat_with_agent("什么是RAG？", "demo"))

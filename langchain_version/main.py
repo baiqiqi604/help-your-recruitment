@@ -1,15 +1,15 @@
 """
-命令行入口
+命令行入口 — 定制化简历大师（LangChain 版）
 
 用法：
     python main.py web                      启动 Web 服务（uvicorn）
     python main.py chat                     启动 CLI 对话
-    python main.py optimize --resume PATH --jd PATH [--out DIR]
-    python main.py optimize --resume PATH --job-id ID [--out DIR]
+    python main.py optimize --resume PATH --jd PATH --company 公司名
+    python main.py optimize --resume PATH --job-id ID --company 公司名
 
 说明：
 - web 的 host / port 取自 config.WEB_CONFIG，可用 --host / --port 覆盖
-- optimize 输出：optimized.docx / optimized.pdf / matching_table.json
+- optimize 输出：定制化简历 + 面试建议 Word 文档（需提供目标公司名称）
 """
 
 from __future__ import annotations
@@ -43,11 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("chat", help="启动 CLI 对话")
 
     # optimize
-    p_opt = sub.add_parser("optimize", help="优化简历并输出 docx/pdf/匹配表")
+    p_opt = sub.add_parser("optimize", help="定制化简历优化，输出双 Word 文档")
     p_opt.add_argument("--resume", required=True, help="简历文件路径（.pdf/.docx/.txt）")
     src = p_opt.add_mutually_exclusive_group(required=True)
     src.add_argument("--jd", help="岗位描述文本文件路径")
     src.add_argument("--job-id", help="知识库中的岗位 id")
+    p_opt.add_argument("--company", required=True, help="目标公司名称（必填）")
     p_opt.add_argument("--out", help="输出目录（默认 config.PATH_CONFIG['output_dir']）")
 
     return parser
@@ -93,21 +94,30 @@ def run_chat() -> int:
     return 0
 
 
+def _read_resume_text(resume_path: str) -> str:
+    """按扩展名读取简历文本（.pdf/.docx/.txt）。"""
+    import resume_reader
+
+    suffix = Path(resume_path).suffix.lower()
+    if suffix == ".txt":
+        return Path(resume_path).read_text(encoding="utf-8", errors="replace").strip()
+    return resume_reader.read_resume(resume_path).strip()
+
+
 def run_optimize(
     resume_path: str,
     jd_path: str | None,
     job_id: str | None,
+    company: str,
     out_dir: str | None,
 ) -> int:
-    """执行完整简历优化流程并输出结果文件。"""
+    """执行定制化简历优化：拆解岗位 → 公司分析 → 优化 → 面试建议 → 双 Word 文档。"""
     import content_optimizer
     import jd_analyzer
     import jd_knowledge_base
-    import resume_reader
-    import resume_writer
 
     # 1. 读取简历
-    resume_text = resume_reader.read_resume(resume_path).strip()
+    resume_text = _read_resume_text(resume_path)
     if not resume_text:
         logger.error("简历内容为空: %s", resume_path)
         return 1
@@ -135,32 +145,57 @@ def run_optimize(
         return 1
     logger.info("已获取 JD 文本：%d 字", len(jd_text))
 
-    # 3. 分析与优化
-    logger.info("开始岗位分析...")
-    jd_analysis = jd_analyzer.analyze_jd(jd_text)
+    # 3. 拆解岗位（含分级/类型/隐含目标/风险项）
+    logger.info("开始岗位拆解...")
+    jd_analysis = jd_analyzer.analyze_jd(jd_text, resume_text=resume_text)
+
+    # 4. 公司分析与求职判断
+    from company_researcher import research_company
+
+    logger.info("开始公司分析：%s", company)
+    company_research = research_company(company, jd_analysis, resume_text)
+
+    # 5. 定制化简历优化 + 四级匹配表
     logger.info("开始简历内容优化...")
     optimized = content_optimizer.optimize_resume_content(resume_text, jd_analysis)
     logger.info("构建匹配关系表...")
     matching_table = content_optimizer.build_matching_table(resume_text, jd_analysis)
 
-    # 4. 输出文件
+    # 6. 面试问题 + 面试建议
+    from interview_advisor import build_interview_advice, generate_interview_questions
+
+    questions = generate_interview_questions(
+        jd_analysis.get("role_type", "tech"), jd_analysis, resume_text
+    )
+    advice = build_interview_advice(company, jd_analysis, resume_text, company_research, questions)
+
+    # 7. 输出双 Word 文档
+    import re
+
+    from resume_writer import write_customized_resume, write_interview_advice_docx
+
+    def _clean(name: str) -> str:
+        return re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "未知"
+
     out_dir_path = Path(out_dir or cfg.PATH_CONFIG["output_dir"])
     out_dir_path.mkdir(parents=True, exist_ok=True)
-    stem = Path(resume_path).stem
-    out_docx = out_dir_path / f"{stem}_optimized.docx"
-    out_pdf = out_dir_path / f"{stem}_optimized.pdf"
-    out_table = out_dir_path / f"{stem}_matching_table.json"
+    company_tag = _clean(company)
+    role_tag = _clean(jd_analysis.get("role_position", "") or "目标岗位")
 
-    resume_writer.write_optimized_resume(optimized, out_docx)
-    resume_writer.docx_to_pdf(out_docx, out_pdf)
+    out_docx = out_dir_path / f"定制化简历_{company_tag}_{role_tag}.docx"
+    out_advice = out_dir_path / f"面试建议_{company_tag}_{role_tag}.docx"
+    out_table = out_dir_path / "matching_table.json"
+
+    write_customized_resume(optimized, str(out_docx))
+    write_interview_advice_docx(advice, str(out_advice))
     out_table.write_text(
         json.dumps(matching_table, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    print("✅ 简历优化完成：")
-    print(f"   DOCX     : {out_docx}")
-    print(f"   PDF      : {out_pdf}")
+    print("✅ 定制化简历完成：")
+    print(f"   定制化简历: {out_docx}")
+    print(f"   面试建议  : {out_advice}")
     print(f"   匹配关系表: {out_table}")
     return 0
 
@@ -176,7 +211,7 @@ def main() -> int:
     if args.command == "chat":
         return run_chat()
     if args.command == "optimize":
-        return run_optimize(args.resume, args.jd, args.job_id, args.out)
+        return run_optimize(args.resume, args.jd, args.job_id, args.company, args.out)
     return 1
 
 
