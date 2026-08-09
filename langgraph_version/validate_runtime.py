@@ -23,7 +23,6 @@ REQUIRED_MODULES = {
     "docx": "python-docx",
     "bs4": "beautifulsoup4",
     "httpx": "httpx",
-    "apscheduler": "APScheduler",
     "dotenv": "python-dotenv",
 }
 

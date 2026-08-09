@@ -108,6 +108,9 @@ PATH_CONFIG = {
 # 爬虫配置
 # ──────────────────────────────────────────────
 CRAWLER_CONFIG = {
+    # 岗位爬虫总开关：默认关闭（岗位库已降级，主流程不再依赖）
+    # 如需启用：CRAWLER_ENABLED=1（并配置对应平台 Cookie）
+    "enabled": os.getenv("CRAWLER_ENABLED", "0") != "0",
     "platforms": ["boss", "lagou", "liepin", "zhilian", "jobui", "51job"],
     "default_city": "全国",
     "keywords": [
@@ -118,7 +121,7 @@ CRAWLER_CONFIG = {
     "max_pages": int(os.getenv("CRAWLER_MAX_PAGES", "3")),
     "timeout": int(os.getenv("CRAWLER_TIMEOUT", "30")),
     "liepin_browser": {
-        "enabled": os.getenv("LIEPIN_BROWSER_ENABLED", "1") != "0",
+        "enabled": os.getenv("LIEPIN_BROWSER_ENABLED", "0") != "0",
         "max_pages": int(os.getenv("LIEPIN_BROWSER_MAX_PAGES", "5")),
         "render_wait_seconds": float(
             os.getenv("LIEPIN_BROWSER_RENDER_WAIT_SECONDS", "2")
@@ -128,7 +131,7 @@ CRAWLER_CONFIG = {
         ),
     },
     "zhilian_browser": {
-        "enabled": os.getenv("ZHILIAN_BROWSER_ENABLED", "1") != "0",
+        "enabled": os.getenv("ZHILIAN_BROWSER_ENABLED", "0") != "0",
         "max_pages": int(os.getenv("ZHILIAN_BROWSER_MAX_PAGES", "3")),
         "render_wait_seconds": float(
             os.getenv("ZHILIAN_BROWSER_RENDER_WAIT_SECONDS", "3")
@@ -183,15 +186,6 @@ CRAWLER_CONFIG = {
 }
 
 # ──────────────────────────────────────────────
-# 定时调度配置
-# ──────────────────────────────────────────────
-SCHEDULER_CONFIG = {
-    "hour": 2,
-    "minute": 0,
-    "job_id": "daily_jd_crawl",
-}
-
-# ──────────────────────────────────────────────
 # 大厂名单（用于标记优质岗位）
 # ──────────────────────────────────────────────
 BIG_TECH_COMPANIES = [
@@ -243,7 +237,6 @@ CONFIG = {
     "chroma": CHROMA_CONFIG,
     "path": PATH_CONFIG,
     "crawler": CRAWLER_CONFIG,
-    "scheduler": SCHEDULER_CONFIG,
     "big_tech_companies": BIG_TECH_COMPANIES,
     "high_frequency_threshold": HIGH_FREQUENCY_THRESHOLD,
     "web": WEB_CONFIG,

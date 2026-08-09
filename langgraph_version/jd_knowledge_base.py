@@ -34,6 +34,66 @@ logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
+# 工具函数（原来自 jd_crawler，岗位爬虫删除后内联）
+# ──────────────────────────────────────────────
+def _clean_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _clean_url(value: Any) -> str:
+    return "".join(str(value or "").split())
+
+
+def deduplicate_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按岗位 ID 去重，同平台去重 + 跨平台去重。
+
+    跨平台去重策略：按「岗位名称 + 公司名 + 地点」组合判断。
+    """
+    seen_ids: set[str] = set()
+    seen_cross: set[str] = set()
+    result: list[dict[str, Any]] = []
+
+    for job in jobs:
+        job = dict(job)
+        for field in ("job_id", "title", "company", "city", "url"):
+            job[field] = _clean_url(job.get(field, "")) if field == "url" else _clean_text(job.get(field, ""))
+
+        job_id = str(job.get("job_id", ""))
+        # 同平台按 job_id 去重
+        if job_id:
+            if job_id in seen_ids:
+                continue
+            seen_ids.add(job_id)
+
+        # 跨平台按 (title, company, city) 组合去重
+        cross_key = "|".join(
+            [
+                job["title"].lower(),
+                job["company"].lower(),
+                job["city"],
+            ]
+        )
+        if cross_key != "||" and cross_key in seen_cross:
+            continue
+        seen_cross.add(cross_key)
+
+        result.append(job)
+
+    return result
+
+
+def mark_premium_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """标记大厂（BAT/字节/华为等）和高频匹配岗位。"""
+    for job in jobs:
+        company = job.get("company", "")
+        job["is_big_tech"] = any(big in company for big in BIG_TECH_COMPANIES)
+        job["is_high_frequency"] = (
+            job.get("match_count", 0) >= HIGH_FREQUENCY_THRESHOLD
+        )
+    return jobs
+
+
+# ──────────────────────────────────────────────
 # Embedding 封装（兼容 ChromaDB 的 EmbeddingFunction 协议）
 # ──────────────────────────────────────────────
 class BGEEmbeddingFunction:
@@ -122,8 +182,6 @@ def build_jd_knowledge_base() -> None:
         return
 
     # 去重 + 标记
-    from jd_crawler import deduplicate_jobs, mark_premium_jobs
-
     jobs = deduplicate_jobs(jobs)
     jobs = mark_premium_jobs(jobs)
 
@@ -155,8 +213,6 @@ def add_jobs(jobs: list[dict[str, Any]]) -> int:
     if not jobs:
         logger.info("add_jobs：无岗位数据，跳过")
         return 0
-
-    from jd_crawler import mark_premium_jobs
 
     jobs = mark_premium_jobs(jobs)
     collection = _get_collection(CHROMA_CONFIG["collection_fulltext"])
@@ -387,8 +443,6 @@ def increment_update(jobs: list[dict[str, Any]]) -> None:
     if not jobs:
         logger.info("增量更新：无新岗位")
         return
-
-    from jd_crawler import mark_premium_jobs
 
     jobs = mark_premium_jobs(jobs)
 
