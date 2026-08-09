@@ -5,117 +5,229 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>简历优化 Agent（LangGraph 版）</title>
   <style>
+    :root {
+      --primary: #4f46e5;
+      --primary-dark: #4338ca;
+      --primary-light: #eef2ff;
+      --bg: #f6f7f9;
+      --card-bg: #ffffff;
+      --border: #e5e7eb;
+      --text: #1f2329;
+      --text-secondary: #6b7280;
+      --text-muted: #9ca3af;
+      --radius: 12px;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+      --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.08);
+      --success: #16a34a;
+      --warning: #d97706;
+      --danger: #dc2626;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-      background: #f0f2f5;
-      color: #1f2329;
+      font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
+      line-height: 1.6;
     }
+
+    /* ── 顶部栏 ── */
     header {
-      background: linear-gradient(135deg, #2563eb, #1d4ed8);
-      color: #fff;
-      padding: 16px 24px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 64px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
     }
-    header h1 { font-size: 20px; font-weight: 600; }
-    header .sub { font-size: 12px; opacity: 0.85; }
+    header .brand { display: flex; align-items: center; gap: 12px; }
+    header .logo {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 18px;
+    }
+    header h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.2px; }
+    header .sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
-    .tabs { display: flex; gap: 8px; padding: 12px 24px 0; }
+    /* ── 标签页 ── */
+    .tabs {
+      display: flex; gap: 4px;
+      max-width: 1080px; margin: 20px auto 0;
+      padding: 0 24px;
+    }
     .tab-btn {
-      border: none; cursor: pointer; padding: 10px 22px;
-      border-radius: 8px 8px 0 0; font-size: 15px;
-      background: #e2e6ed; color: #555;
+      border: none; cursor: pointer;
+      padding: 9px 20px; border-radius: 8px;
+      font-size: 14px; font-weight: 500;
+      background: transparent; color: var(--text-secondary);
+      transition: all 0.15s ease;
     }
-    .tab-btn.active { background: #fff; color: #2563eb; font-weight: 600; }
+    .tab-btn:hover { background: var(--primary-light); color: var(--primary); }
+    .tab-btn.active {
+      background: var(--primary); color: #fff;
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
+    }
 
-    .panel { display: none; padding: 20px 24px 32px; }
+    /* ── 面板 / 卡片 ── */
+    .panel { display: none; padding: 20px 24px 40px; max-width: 1080px; margin: 0 auto; }
     .panel.active { display: block; }
-
     .card {
-      background: #fff; border-radius: 12px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      padding: 20px; margin-bottom: 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px; margin-bottom: 20px;
+      transition: box-shadow 0.2s ease;
     }
-    .card h3 { font-size: 16px; margin-bottom: 12px; }
+    .card:hover { box-shadow: var(--shadow-lg); }
+    .card-title {
+      font-size: 16px; font-weight: 600; margin-bottom: 6px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 18px; }
 
     /* ── 聊天 ── */
     #chat-box {
-      height: 420px; overflow-y: auto; border: 1px solid #e5e7eb;
-      border-radius: 10px; padding: 14px; background: #fafbfc;
+      height: 420px; overflow-y: auto;
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 16px; background: #fafbfc;
+      scroll-behavior: smooth;
     }
-    .msg { margin-bottom: 12px; display: flex; }
+    .msg { margin-bottom: 14px; display: flex; }
     .msg.user { justify-content: flex-end; }
     .msg .bubble {
-      max-width: 78%; padding: 10px 14px; border-radius: 10px;
-      white-space: pre-wrap; word-break: break-word; line-height: 1.6;
+      max-width: 78%; padding: 10px 14px; border-radius: 12px;
+      white-space: pre-wrap; word-break: break-word; line-height: 1.65; font-size: 14px;
     }
-    .msg.user .bubble { background: #2563eb; color: #fff; }
-    .msg.assistant .bubble { background: #fff; border: 1px solid #e5e7eb; }
-    .chat-input-row { display: flex; gap: 8px; margin-top: 12px; }
-    .chat-input-row input {
-      flex: 1; padding: 10px 12px; border: 1px solid #d1d5db;
-      border-radius: 8px; font-size: 14px;
-    }
-    .chat-input-row input:focus { outline: none; border-color: #2563eb; }
+    .msg.user .bubble { background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
+    .msg.assistant .bubble { background: #fff; border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+    .chat-input-row { display: flex; gap: 10px; margin-top: 14px; }
+    .chat-input-row input { flex: 1; }
 
-    /* ── 按钮 / 表单 ── */
+    /* ── 表单 ── */
+    .form-row { margin-bottom: 16px; }
+    label {
+      display: block; font-size: 13px; font-weight: 500;
+      color: var(--text-secondary); margin-bottom: 6px;
+    }
+    .hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+    textarea, input[type="text"], select {
+      width: 100%; padding: 10px 12px;
+      border: 1px solid var(--border); border-radius: 8px;
+      font-size: 14px; font-family: inherit; color: var(--text);
+      background: #fff; transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    textarea:focus, input[type="text"]:focus, select:focus {
+      outline: none; border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+    }
+    textarea { resize: vertical; line-height: 1.6; }
+    input[type="file"] {
+      padding: 8px; border: 1px dashed var(--border); border-radius: 8px;
+      background: #fafbfc; font-size: 13px; color: var(--text-secondary);
+    }
+    .flex-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .flex-row .grow { flex: 1; min-width: 120px; }
+    .flex-row .grow-2 { flex: 2; min-width: 200px; }
+    .upload-input { flex: 1; }
+    .btn-violet { background: #7c3aed; }
+    .btn-violet:hover { background: #6d28d9; }
+    .exp-results {
+      max-height: 400px; overflow-y: auto;
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px; background: #fafbfc;
+    }
+
+    /* ── 按钮 ── */
     button.primary {
-      background: #2563eb; color: #fff; border: none;
-      padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px;
+      background: var(--primary); color: #fff; border: none;
+      padding: 10px 22px; border-radius: 8px; cursor: pointer;
+      font-size: 14px; font-weight: 500;
+      transition: background 0.15s ease, transform 0.1s ease;
     }
-    button.primary:hover { background: #1d4ed8; }
-    button.primary:disabled { background: #93b4f3; cursor: not-allowed; }
-    textarea, input[type="text"] {
-      width: 100%; padding: 10px 12px; border: 1px solid #d1d5db;
-      border-radius: 8px; font-size: 14px; font-family: inherit;
-    }
-    textarea:focus, input[type="text"]:focus { outline: none; border-color: #2563eb; }
-    label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
-    .form-row { margin-bottom: 14px; }
-    .hint { font-size: 12px; color: #999; margin-top: 4px; }
+    button.primary:hover { background: var(--primary-dark); }
+    button.primary:active { transform: scale(0.98); }
+    button.primary:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+    /* ── 状态条 ── */
+    .status { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; display: none; }
+    .status.error { display: block; background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
+    .status.loading { display: block; background: var(--primary-light); color: var(--primary-dark); border: 1px solid #c7d2fe; }
+    .status.success { display: block; background: #f0fdf4; color: var(--success); border: 1px solid #bbf7d0; }
 
     /* ── 结果区 ── */
-    #result { display: none; }
-    #optimized-text {
-      width: 100%; min-height: 320px; white-space: pre-wrap;
+    pre {
+      background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; font-size: 12.5px; line-height: 1.55;
+      overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+      max-height: 260px; overflow-y: auto;
     }
-    table {
-      width: 100%; border-collapse: collapse; font-size: 13px;
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .table-wrap { overflow-x: auto; }
+    th, td {
+      border: 1px solid var(--border); padding: 9px 12px;
+      text-align: left; vertical-align: top; line-height: 1.5;
     }
-    th, td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
-    th { background: #f3f4f6; }
-    .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+    th { background: #f8fafc; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+    #question-table th:nth-child(1) { width: 12%; }
+    #question-table th:nth-child(2) { width: 55%; }
+    #question-table th:nth-child(3) { width: 33%; }
+    #matching-table th:nth-child(1) { width: 20%; }
+    #matching-table th:nth-child(2) { width: 22%; }
+    #matching-table th:nth-child(3) { width: 10%; }
+    #matching-table th:nth-child(4) { width: 12%; }
+    #matching-table th:nth-child(5) { width: 24%; }
+    #matching-table th:nth-child(6) { width: 12%; }
+    tr:hover td { background: #fafbfc; }
+    .tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; }
     .tag.strong { background: #dcfce7; color: #15803d; }
+    .tag.partial { background: #fef9c3; color: #a16207; }
     .tag.medium { background: #fef9c3; color: #a16207; }
     .tag.weak { background: #fee2e2; color: #b91c1c; }
+    .tag.missing { background: #fee2e2; color: #b91c1c; }
 
-    .status { padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; display: none; }
-    .status.error { display: block; background: #fee2e2; color: #b91c1c; }
-    .status.loading { display: block; background: #e0e7ff; color: #3730a3; }
-    .status.success { display: block; background: #dcfce7; color: #15803d; }
+    /* ── 滚动条 ── */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+    /* ── 响应式 ── */
+    @media (max-width: 720px) {
+      header { padding: 0 16px; }
+      .tabs { padding: 0 16px; }
+      .panel { padding: 16px 16px 32px; }
+      .card { padding: 18px; }
+      .msg .bubble { max-width: 88%; }
+    }
   </style>
 </head>
 <body>
   <header>
-    <div>
-      <h1>简历优化 Agent</h1>
-      <div class="sub">LangGraph 图编排 · 多轮对话记忆 · RAG 岗位知识库</div>
+    <div class="brand">
+      <div class="logo">📄</div>
+      <div>
+        <h1>简历优化 Agent</h1>
+        <div class="sub">LangGraph 定制流水线 · 面试题库 · 求职建议</div>
+      </div>
     </div>
   </header>
 
   <nav class="tabs">
     <button class="tab-btn active" id="tab-chat-btn" onclick="switchTab('chat')">💬 聊天</button>
     <button class="tab-btn" id="tab-opt-btn" onclick="switchTab('optimize')">📝 简历优化</button>
+    <button class="tab-btn" id="tab-exp-btn" onclick="switchTab('experience')">🎯 面试题库</button>
   </nav>
 
   <!-- ═══ 聊天面板 ═══ -->
   <section class="panel active" id="panel-chat">
     <div class="card">
-      <h3>智能对话</h3>
-      <p class="hint">可让 Agent 分析岗位描述、优化简历、检索岗位知识库等。多轮对话自动记忆（session 隔离）。</p>
+      <div class="card-title">💬 智能对话</div>
+      <p class="card-desc">可让 Agent 分析岗位描述、优化简历、检索岗位知识库等。多轮对话自动记忆（session 隔离）。</p>
       <div id="chat-box"></div>
       <div class="chat-input-row">
         <input type="text" id="chat-input" placeholder="输入你的问题，回车发送…" onkeydown="if(event.key==='Enter')sendChat()" />
@@ -127,12 +239,28 @@
   <!-- ═══ 优化面板 ═══ -->
   <section class="panel" id="panel-optimize">
     <div class="card">
-      <h3>简历优化</h3>
+      <div class="card-title">📝 简历优化</div>
+      <p class="card-desc">上传或粘贴简历，填写目标公司与岗位 JD，生成定制化简历与面试建议。</p>
       <div class="status" id="opt-status"></div>
 
       <div class="form-row">
+        <label for="target-company">目标公司名称（必填）</label>
+        <input type="text" id="target-company" placeholder="例如：字节跳动、美团、某科技有限公司…" />
+        <p class="hint">用于公司信息搜集、求职判断与面试建议生成。</p>
+      </div>
+
+      <div class="form-row">
+        <label for="resume-file">上传简历文件（.pdf / .docx / .txt，自动解析为文本）</label>
+        <div class="flex-row">
+          <input type="file" id="resume-file" accept=".pdf,.docx,.txt" class="upload-input" />
+          <button class="primary" id="upload-btn" onclick="uploadResume()" style="white-space:nowrap;">解析并填入</button>
+        </div>
+        <p class="hint" id="upload-hint">选择 PDF/DOCX/TXT 简历文件，解析出的文本将自动填入下方简历文本区。</p>
+      </div>
+
+      <div class="form-row">
         <label for="resume-text">简历文本（必填）</label>
-        <textarea id="resume-text" rows="10" placeholder="粘贴原始简历全文…"></textarea>
+        <textarea id="resume-text" rows="10" placeholder="粘贴原始简历全文，或上传文件自动填入…"></textarea>
       </div>
 
       <div class="form-row">
@@ -150,11 +278,43 @@
     </div>
 
     <div class="card" id="result">
-      <h3>优化结果</h3>
+      <div class="card-title">🎯 定制化结果</div>
+      <p class="card-desc">优化完成后展示：公司判断、面试建议、匹配关系与生成文档。</p>
+
+      <div class="form-row" id="doc-links" style="display:none;">
+        <label>生成文档（Word）</label>
+        <p class="hint" id="doc-links-content"></p>
+      </div>
 
       <div class="form-row">
         <label>岗位分析（jd_analysis）</label>
         <pre id="jd-analysis"></pre>
+      </div>
+
+      <div class="form-row">
+        <label>公司判断与求职建议（company_research）</label>
+        <pre id="company-research"></pre>
+      </div>
+
+      <div class="form-row">
+        <label>面试建议（interview_advice）</label>
+        <textarea id="interview-advice" rows="14" readonly></textarea>
+      </div>
+
+      <div class="form-row">
+        <label>面试问题清单</label>
+        <div class="table-wrap">
+          <table id="question-table">
+            <thead>
+              <tr>
+                <th>轮次</th>
+                <th>面试问题</th>
+                <th>准备提示</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="form-row">
@@ -164,19 +324,66 @@
 
       <div class="form-row">
         <label>简历-JD 匹配关系表</label>
-        <div style="overflow-x:auto;">
+        <div class="table-wrap">
           <table id="matching-table">
             <thead>
               <tr>
-                <th style="width:25%">JD 要求</th>
-                <th style="width:30%">用户经历证据</th>
-                <th style="width:12%">匹配强度</th>
-                <th style="width:33%">推荐表达</th>
+                <th>JD 要求</th>
+                <th>用户经历证据</th>
+                <th>匹配强度</th>
+                <th>放入位置</th>
+                <th>推荐表达</th>
+                <th>需确认</th>
               </tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 面试题库面板 ═══ -->
+  <section class="panel" id="panel-experience">
+    <div class="card">
+      <div class="card-title">🎯 面试题库</div>
+      <p class="card-desc">检索面试/笔试经验知识库（来自公开面经 + 手动录入，AI 结构化整理，仅供参考）。</p>
+      <div class="status" id="exp-status"></div>
+
+      <div class="form-row">
+        <label for="exp-query">检索关键词</label>
+        <input type="text" id="exp-query" placeholder="例如：高并发下单、MySQL 优化、LRU…" />
+      </div>
+      <div class="flex-row">
+        <div class="grow">
+          <label for="exp-company">公司（可选）</label>
+          <input type="text" id="exp-company" placeholder="如：某公司" />
+        </div>
+        <div class="grow">
+          <label for="exp-role">岗位（可选）</label>
+          <input type="text" id="exp-role" placeholder="如：Python后端" />
+        </div>
+        <div class="grow">
+          <label for="exp-stage">轮次（可选）</label>
+          <select id="exp-stage">
+            <option value="">全部</option>
+            <option>HR面</option>
+            <option>业务面</option>
+            <option>专业面</option>
+            <option>主管面</option>
+            <option>终面</option>
+            <option>笔试</option>
+          </select>
+        </div>
+        <div class="flex-row" style="align-items:flex-end; margin-left:auto;">
+          <button class="primary" onclick="searchExp()">检索</button>
+          <button class="primary btn-violet" onclick="searchAlgorithmExp()">笔试算法题</button>
+        </div>
+      </div>
+
+      <div class="form-row" style="margin-top:14px;">
+        <label for="exp-results">检索结果</label>
+        <div class="exp-results" id="exp-results"></div>
       </div>
     </div>
   </section>
@@ -196,8 +403,10 @@
     function switchTab(name) {
       document.getElementById("tab-chat-btn").classList.toggle("active", name === "chat");
       document.getElementById("tab-opt-btn").classList.toggle("active", name === "optimize");
+      document.getElementById("tab-exp-btn").classList.toggle("active", name === "experience");
       document.getElementById("panel-chat").classList.toggle("active", name === "chat");
       document.getElementById("panel-optimize").classList.toggle("active", name === "optimize");
+      document.getElementById("panel-experience").classList.toggle("active", name === "experience");
     }
 
     // ── 聊天 ──
@@ -252,38 +461,228 @@
       el.textContent = text;
     }
 
+    // ── 简历文件上传 ──
+    async function uploadResume() {
+      const fileInput = document.getElementById("resume-file");
+      const btn = document.getElementById("upload-btn");
+      const hint = document.getElementById("upload-hint");
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) { hint.textContent = "请先选择简历文件（.pdf / .docx / .txt）。"; hint.style.color = "#b91c1c"; return; }
+
+      btn.disabled = true;
+      hint.textContent = "正在解析 " + file.name + " …";
+      hint.style.color = "#3730a3";
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const resp = await fetch("/api/upload", { method: "POST", body: fd });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "上传解析失败");
+
+        document.getElementById("resume-text").value = data.text || "";
+        hint.textContent = "✅ 已解析 " + data.filename + "，共 " + (data.text || "").length + " 字，已填入简历文本区（可继续编辑）。";
+        hint.style.color = "#15803d";
+      } catch (err) {
+        hint.textContent = "❌ " + err.message;
+        hint.style.color = "#b91c1c";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     async function runOptimize() {
       const resume_text = document.getElementById("resume-text").value.trim();
       const jd_text = document.getElementById("jd-text").value.trim();
       const job_id = document.getElementById("job-id").value.trim();
+      const target_company = document.getElementById("target-company").value.trim();
 
       if (!resume_text) { setStatus("error", "请填写简历文本"); return; }
       if (!jd_text && !job_id) { setStatus("error", "请填写 JD 文本或岗位 ID"); return; }
+      if (!target_company) { setStatus("error", "请填写目标公司名称"); return; }
 
       const btn = document.getElementById("opt-btn");
       btn.disabled = true;
-      setStatus("loading", "正在执行 LangGraph 优化流水线（分析 JD → 优化 → 审核）…");
+      setStatus("loading", "正在执行定制流水线（拆解岗位 → 公司分析 → 优化 → 审核 → 面试建议）…");
 
       try {
         const resp = await fetch("/api/optimize", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ resume_text: resume_text, jd_text: jd_text, job_id: job_id })
+          body: JSON.stringify({
+            resume_text: resume_text, jd_text: jd_text, job_id: job_id,
+            target_company: target_company
+          })
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "请求失败");
 
         document.getElementById("jd-analysis").textContent =
           JSON.stringify(data.jd_analysis || {}, null, 2);
+        document.getElementById("company-research").textContent =
+          JSON.stringify(data.company_research || {}, null, 2);
+        document.getElementById("interview-advice").value = data.interview_advice || "";
         document.getElementById("optimized-text").value = data.optimized || "";
         renderMatchingTable(data.matching_table || []);
+        renderQuestionTable(data.interview_questions || []);
+        renderDocLinks(data.resume_docx || "", data.advice_docx || "");
         document.getElementById("result").style.display = "block";
-        setStatus("success", "优化完成！");
+        setStatus("success", "定制完成！已生成定制化简历与面试建议。");
       } catch (err) {
         setStatus("error", "优化失败：" + err.message);
       } finally {
         btn.disabled = false;
       }
+    }
+
+    function renderDocLinks(resumeDocx, adviceDocx) {
+      const box = document.getElementById("doc-links");
+      const content = document.getElementById("doc-links-content");
+      if (!resumeDocx && !adviceDocx) { box.style.display = "none"; return; }
+      const links = [];
+      if (resumeDocx) {
+        links.push('📄 <a href="/api/download?filename=' + encodeURIComponent(resumeDocx) + '" target="_blank">定制化简历（Word）</a>');
+      }
+      if (adviceDocx) {
+        links.push('🎯 <a href="/api/download?filename=' + encodeURIComponent(adviceDocx) + '" target="_blank">面试建议（Word）</a>');
+      }
+      content.innerHTML = links.join("　|　");
+      box.style.display = "block";
+    }
+
+    // ── 面试题库 ──
+    function setExpStatus(kind, text) {
+      const el = document.getElementById("exp-status");
+      el.className = "status " + kind;
+      el.textContent = text;
+    }
+
+    // 题库分页状态
+    const EXP_PAGE_SIZE = 10;
+    let expAllQuestions = [];   // 当前检索的全部结果
+    let expPage = 1;            // 当前页码（从 1 开始）
+
+    function renderExpResults(questions) {
+      expAllQuestions = questions || [];
+      expPage = 1;
+      renderExpPage();
+    }
+
+    function renderExpPage() {
+      const box = document.getElementById("exp-results");
+      if (!expAllQuestions.length) {
+        box.innerHTML = '<p class="hint" style="margin:0;">暂无检索结果。可先点击「笔试算法题」查看算法题。</p>';
+        return;
+      }
+      const totalPages = Math.max(1, Math.ceil(expAllQuestions.length / EXP_PAGE_SIZE));
+      if (expPage > totalPages) expPage = totalPages;
+      const start = (expPage - 1) * EXP_PAGE_SIZE;
+      const pageQuestions = expAllQuestions.slice(start, start + EXP_PAGE_SIZE);
+
+      box.innerHTML = "";
+      pageQuestions.forEach(function (q) {
+        const item = document.createElement("div");
+        item.style.cssText = "padding:10px; border-bottom:1px solid #e5e7eb;";
+        item.innerHTML =
+          '<div style="font-weight:600;">' + (q.question || "") + '</div>' +
+          '<div class="hint" style="margin-top:4px;">' +
+          '[' + (q.stage || "通用") + '/' + (q.question_type || "面试问答") + '] ' +
+          (q.company ? "公司：" + q.company + " " : "") +
+          (q.role ? "岗位：" + q.role + " " : "") +
+          '质量 ' + (q.quality || 3) + '/5' +
+          (q.is_algorithm ? " · 算法题" : "") +
+          '</div>' +
+          ((q.key_points && q.key_points.length)
+            ? '<div class="hint" style="margin-top:2px;">考察点：' + q.key_points.join("、") + '</div>'
+            : "") +
+          (q.reference_answer
+            ? '<div style="margin-top:4px; font-size:13px; white-space:pre-wrap;">参考：' + q.reference_answer + '</div>'
+            : "") +
+          (q.source_url
+            ? '<div class="hint" style="margin-top:2px;">来源：<a href="' + q.source_url + '" target="_blank">' + q.source_url + '</a></div>'
+            : "");
+        box.appendChild(item);
+      });
+
+      // 分页控件
+      const pager = document.createElement("div");
+      pager.style.cssText = "display:flex; align-items:center; justify-content:center; gap:12px; padding:12px 0 4px;";
+      const prevBtn = document.createElement("button");
+      prevBtn.className = "primary";
+      prevBtn.textContent = "← 上一页";
+      prevBtn.disabled = expPage <= 1;
+      prevBtn.onclick = function () { if (expPage > 1) { expPage--; renderExpPage(); } };
+      const nextBtn = document.createElement("button");
+      nextBtn.className = "primary";
+      nextBtn.textContent = "下一页 →";
+      nextBtn.disabled = expPage >= totalPages;
+      nextBtn.onclick = function () { if (expPage < totalPages) { expPage++; renderExpPage(); } };
+      const info = document.createElement("span");
+      info.style.cssText = "font-size:13px; color:#6b7280;";
+      info.textContent = "第 " + expPage + " / " + totalPages + " 页 · 共 " + expAllQuestions.length + " 条";
+      pager.appendChild(prevBtn);
+      pager.appendChild(info);
+      pager.appendChild(nextBtn);
+      box.appendChild(pager);
+    }
+
+    async function searchExp() {
+      const q = document.getElementById("exp-query").value.trim();
+      if (!q) { setExpStatus("error", "请输入检索关键词"); return; }
+      const params = new URLSearchParams({
+        q: q,
+        company: document.getElementById("exp-company").value.trim(),
+        role: document.getElementById("exp-role").value.trim(),
+        stage: document.getElementById("exp-stage").value,
+        top_k: "0"
+      });
+      setExpStatus("loading", "正在检索面试题库…");
+      try {
+        const resp = await fetch("/api/exp/search?" + params.toString());
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "检索失败");
+        renderExpResults(data.questions || []);
+        setExpStatus("success", "检索完成，共 " + (data.questions || []).length + " 条。");
+      } catch (err) {
+        setExpStatus("error", "检索失败：" + err.message);
+      }
+    }
+
+    async function searchAlgorithmExp() {
+      const role = document.getElementById("exp-role").value.trim();
+      const params = new URLSearchParams({ role: role, top_k: "0" });
+      setExpStatus("loading", "正在获取笔试算法题…");
+      try {
+        const resp = await fetch("/api/exp/algorithm?" + params.toString());
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "获取失败");
+        renderExpResults(data.questions || []);
+        setExpStatus("success", "算法题 " + (data.questions || []).length + " 条。");
+      } catch (err) {
+        setExpStatus("error", "获取失败：" + err.message);
+      }
+    }
+
+    function renderQuestionTable(questions) {
+      const tbody = document.querySelector("#question-table tbody");
+      tbody.innerHTML = "";
+      if (!questions.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 3;
+        td.textContent = "暂无面试问题数据";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+      questions.forEach(function (q) {
+        const tr = document.createElement("tr");
+        [q.stage, q.question, q.prepare_hint].forEach(function (val) {
+          const td = document.createElement("td");
+          td.textContent = val || "";
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
     }
 
     function renderMatchingTable(rows) {
@@ -292,7 +691,7 @@
       if (!rows.length) {
         const tr = document.createElement("tr");
         const td = document.createElement("td");
-        td.colSpan = 4;
+        td.colSpan = 6;
         td.textContent = "暂无匹配数据";
         tr.appendChild(td);
         tbody.appendChild(tr);
@@ -300,19 +699,30 @@
       }
       rows.forEach(function (row) {
         const tr = document.createElement("tr");
-        [row.jd_requirement, row.user_evidence, row.match_strength, row.suggested_expression]
-          .forEach(function (val, idx) {
-            const td = document.createElement("td");
-            if (idx === 2) {
-              const tag = document.createElement("span");
-              tag.className = "tag " + (val || "weak");
-              tag.textContent = val || "weak";
-              td.appendChild(tag);
-            } else {
-              td.textContent = val || "";
-            }
-            tr.appendChild(td);
-          });
+
+        // 匹配强度标签
+        const strengthTag = document.createElement("span");
+        strengthTag.className = "tag " + (row.match_strength || "weak");
+        strengthTag.textContent =
+          ({ strong: "强", partial: "部分", weak: "弱", missing: "缺失" })[row.match_strength] || row.match_strength || "弱";
+
+        const cells = [
+          row.jd_requirement,
+          row.user_evidence,
+          strengthTag,
+          row.resume_position,
+          row.suggested_expression,
+          row.needs_confirmation ? "是" : "否"
+        ];
+        cells.forEach(function (val, idx) {
+          const td = document.createElement("td");
+          if (idx === 2 && val instanceof HTMLElement) {
+            td.appendChild(val);
+          } else {
+            td.textContent = val || "";
+          }
+          tr.appendChild(td);
+        });
         tbody.appendChild(tr);
       });
     }
