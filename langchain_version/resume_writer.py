@@ -1,173 +1,137 @@
 """
-简历写入模块
+格式保留与输出模块
 
 职责：
-1. 将优化后的简历文本按小节写入结构化 docx（python-docx）
-2. 支持 docx → PDF 转换（docx2pdf）
+1. 将优化后的文本写回 Word 文件（保留原格式）
+2. 可选：将 Word 导出为 PDF
 
-依赖：python-docx、docx2pdf
+替换策略：按行顺序替换 + 保留首 run 格式（最稳妥方案）
+
+依赖：python-docx, docx2pdf
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
-
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
 
 logger = logging.getLogger(__name__)
 
-# 简历标准小节标题（按解析优先级排列）
-SECTION_TITLES = [
-    "姓名",
-    "求职目标",
-    "个人摘要",
-    "核心技能",
-    "工作经历",
-    "项目经历",
-    "教育背景",
-    "证书",
-]
 
-# 常见标题前缀（如 "一、" "1." "-" 等），解析时剔除
-_TITLE_PREFIX = re.compile(r"^[\s\d一二三四五六七八九十、.．\-—_*]*")
+def write_optimized_resume(
+    original_docx: str, optimized_text: str, output_docx: str
+) -> None:
+    """把优化后的内容写回 Word，保留原有格式。
 
-
-def _match_section_title(line: str) -> str | None:
-    """判断一行是否为小节标题，返回标准标题；否则返回 None。"""
-    cleaned = _TITLE_PREFIX.sub("", line.strip())
-    for title in SECTION_TITLES:
-        if cleaned.startswith(title):
-            rest = cleaned[len(title):]
-            # 标题行后面通常紧跟分隔符 / 冒号 / 竖线 / 换行
-            if not rest or rest.startswith(("/", "：", ":", "、", "|", " ")):
-                return title
-            # 别名：如 "技能" → "核心技能"、"经历" → 忽略
-    # 别名映射兜底
-    aliases = {"技能": "核心技能", "联系方式": "姓名", "其他": "证书"}
-    for alias, target in aliases.items():
-        if cleaned.startswith(alias):
-            return target
-    return None
-
-
-def _split_sections(text: str) -> list[tuple[str, list[str]]]:
-    """将简历文本按小节标题拆分。
-
-    Returns:
-        形如 [("姓名", ["张三 | 138..."]), ("求职目标", [...])] 的列表
-    """
-    lines = [ln.strip() for ln in text.splitlines()]
-    sections: list[tuple[str, list[str]]] = []
-    current_title = "简历"
-    current_lines: list[str] = []
-
-    def flush() -> None:
-        nonlocal current_lines
-        if current_lines:
-            sections.append((current_title, current_lines))
-        current_lines = []
-
-    for line in lines:
-        if not line:
-            continue
-        title = _match_section_title(line)
-        if title:
-            flush()
-            current_title = title
-        else:
-            current_lines.append(line)
-    flush()
-
-    if not sections:
-        sections = [("简历", [ln for ln in lines if ln])]
-    return sections
-
-
-def write_optimized_resume(text: str, out_docx: str | Path) -> str:
-    """将优化后的简历文本写入结构化 docx。
-
-    按「姓名 / 求职目标 / 个人摘要 / 核心技能 / 工作经历 / 项目经历 /
-    教育背景 / 证书」小节排版：小节标题加粗，首节（姓名）居中大号。
+    策略：
+    - 按段落顺序逐行替换文本
+    - 保留每个段落首个 run 的字体格式
+    - 行数不一致时：原简历行数多则截断，优化文本多则追加
 
     Args:
-        text: 优化后的简历全文
-        out_docx: 输出 docx 路径
-
-    Returns:
-        输出 docx 的绝对路径
+        original_docx: 原始 Word 文件路径（提供格式模板）
+        optimized_text: 优化后的简历全文
+        output_docx: 输出 Word 文件路径
 
     Raises:
-        ValueError: 简历文本为空
+        FileNotFoundError: 原始 Word 文件不存在
     """
-    if not text or not text.strip():
-        raise ValueError("简历文本不能为空")
+    if not Path(original_docx).exists():
+        raise FileNotFoundError(f"原始 Word 文件不存在: {original_docx}")
 
-    out = Path(out_docx)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from docx import Document
+    except ImportError as e:
+        raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
 
-    doc = Document()
-    normal = doc.styles["Normal"]
-    normal.font.name = "微软雅黑"
-    normal.font.size = Pt(10.5)
+    # 确保输出目录存在
+    Path(output_docx).parent.mkdir(parents=True, exist_ok=True)
 
-    sections = _split_sections(text)
+    document = Document(original_docx)
 
-    for idx, (title, lines) in enumerate(sections):
-        is_name_section = idx == 0 and title in ("姓名", "简历")
+    # 将优化后文本按行拆分（过滤纯空行但保留顺序）
+    new_lines = [line.rstrip() for line in optimized_text.splitlines()]
+    # 去掉首尾空行
+    while new_lines and not new_lines[0].strip():
+        new_lines.pop(0)
+    while new_lines and not new_lines[-1].strip():
+        new_lines.pop()
 
-        # 小节标题
-        heading = doc.add_paragraph()
-        if is_name_section:
-            heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = heading.add_run(title)
-        run.bold = True
-        run.font.size = Pt(16) if is_name_section else Pt(13)
-        heading.paragraph_format.space_before = Pt(6)
-        heading.paragraph_format.space_after = Pt(2)
+    paragraphs = document.paragraphs
+    logger.info(
+        "写回简历：原段落 %d 个，优化后行数 %d",
+        len(paragraphs),
+        len(new_lines),
+    )
 
-        # 小节正文
-        for line in lines:
-            para = doc.add_paragraph()
-            para.paragraph_format.space_after = Pt(2)
-            para.add_run(line)
+    # 按行顺序替换：保留首 run 格式
+    for i, para in enumerate(paragraphs):
+        if i < len(new_lines):
+            _replace_paragraph_text(para, new_lines[i])
+        else:
+            # 原简历段落多于优化文本：清空多余段落
+            _replace_paragraph_text(para, "")
 
-    doc.save(str(out))
-    logger.info("优化后简历已写入: %s（%d 个小节）", out, len(sections))
-    return str(out)
+    # 优化文本行数多于原段落：在末尾追加新段落
+    if len(new_lines) > len(paragraphs):
+        for extra_line in new_lines[len(paragraphs):]:
+            document.add_paragraph(extra_line)
+
+    document.save(output_docx)
+    logger.info("优化后简历已保存: %s", output_docx)
 
 
-def docx_to_pdf(docx_path: str | Path, pdf_path: str | Path) -> str:
-    """将 docx 文件转换为 PDF。
+def _replace_paragraph_text(paragraph, new_text: str) -> None:
+    """替换段落文本，保留首个 run 的格式。
 
-    转换策略：优先 docx2pdf（需本机 MS Word，格式最保真）；
+    策略：将新文本写入首个 run，清空其余 run 的内容。
+    这样能保留首 run 的字体/字号/加粗等格式属性。
+    """
+    runs = paragraph.runs
+
+    # 段落没有任何 run：直接新增一个
+    if not runs:
+        if new_text:
+            paragraph.add_run(new_text)
+        return
+
+    # 首 run 写入新文本
+    runs[0].text = new_text
+    # 清空其余 run（保留 run 对象但置空文本，避免破坏 XML 结构）
+    for run in runs[1:]:
+        run.text = ""
+
+
+def docx_to_pdf(docx_path: str, pdf_path: str) -> None:
+    """Word 转 PDF（可选功能）。
+
+    转换策略：优先 docx2pdf（需本机 Microsoft Word，格式最保真）；
     未安装或转换失败时回退 pdf2docx 内置 Converter（纯 Python 实现，无需 Word）。
 
     Args:
-        docx_path: 源 docx 路径
-        pdf_path: 输出 pdf 路径
+        docx_path: 输入 Word 文件路径
+        pdf_path: 输出 PDF 文件路径
 
-    Returns:
-        PDF 路径；docx2pdf 与 pdf2docx 均失败时记 warning 并返回 ""。
+    Raises:
+        FileNotFoundError: 输入 Word 文件不存在
+        ImportError: docx2pdf 与 pdf2docx 均不可用
+        ValueError: 转换未产出 PDF 文件
     """
-    src = Path(docx_path)
-    dst = Path(pdf_path)
-    if not src.exists():
-        raise ValueError(f"docx 文件不存在: {src}")
+    if not Path(docx_path).exists():
+        raise FileNotFoundError(f"Word 文件不存在: {docx_path}")
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
+    # 确保输出目录存在
+    Path(pdf_path).parent.mkdir(parents=True, exist_ok=True)
 
     # 优先 docx2pdf（依赖 MS Word，保真度高）
     try:
         from docx2pdf import convert
 
-        convert(str(src), str(dst))
-        if dst.exists():
-            logger.info("docx 转 PDF 完成（docx2pdf）: %s", dst)
-            return str(dst)
+        logger.info("开始转换 Word -> PDF（docx2pdf）: %s", docx_path)
+        convert(docx_path, pdf_path)
+        if Path(pdf_path).exists():
+            logger.info("PDF 导出完成: %s", pdf_path)
+            return
         logger.warning("docx2pdf 未产出文件，回退 pdf2docx")
     except ImportError:
         logger.warning("docx2pdf 未安装，回退 pdf2docx")
@@ -177,41 +141,158 @@ def docx_to_pdf(docx_path: str | Path, pdf_path: str | Path) -> str:
     # 回退 pdf2docx（无需 Word）
     try:
         from pdf2docx import Converter
-    except ImportError:
-        logger.warning("pdf2docx 也未安装，无法导出 PDF")
-        return ""
+    except ImportError as e:
+        raise ImportError(
+            "缺少 PDF 导出依赖，请执行: pip install pdf2docx"
+        ) from e
 
-    converter = Converter(str(src))
+    logger.info("开始转换 Word -> PDF（pdf2docx）: %s", docx_path)
+    converter = Converter(docx_path)
     try:
-        converter.convert(str(dst))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("pdf2docx 转换失败: %s", e)
-        return ""
+        converter.convert(pdf_path)
     finally:
         converter.close()
 
-    if not dst.exists():
-        logger.warning("docx 转 PDF 失败（docx2pdf 与 pdf2docx 均未产出文件）")
-        return ""
-    logger.info("docx 转 PDF 完成（pdf2docx）: %s", dst)
-    return str(dst)
+    if not Path(pdf_path).exists():
+        raise ValueError("PDF 导出失败，docx2pdf 与 pdf2docx 均未产出文件")
+    logger.info("PDF 导出完成: %s", pdf_path)
+
+
+# ──────────────────────────────────────────────
+# 定制化简历 / 面试建议 Word 文档生成（依据《定制化简历大师》Skill）
+# ──────────────────────────────────────────────
+def write_customized_resume(optimized_text: str, output_docx: str) -> str:
+    """将优化后的简历文本生成为新的 Word 文档（不修改用户原始文件）。
+
+    Args:
+        optimized_text: 优化后的简历全文
+        output_docx: 输出 docx 路径
+
+    Returns:
+        输出 docx 绝对路径
+
+    Raises:
+        ValueError: 简历文本为空
+    """
+    if not optimized_text or not optimized_text.strip():
+        raise ValueError("简历文本不能为空")
+
+    out = Path(output_docx)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
+    except ImportError as e:
+        raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "微软雅黑"
+    normal.font.size = Pt(10.5)
+
+    lines = [line.rstrip() for line in optimized_text.splitlines()]
+    section_title = ("姓名", "联系方式", "求职目标", "个人摘要", "核心技能",
+                     "工作经历", "项目经历", "教育背景", "证书", "奖项", "其他")
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        para = doc.add_paragraph()
+        run = para.add_run(stripped)
+        if any(stripped.startswith(prefix) for prefix in section_title) and len(stripped) <= 30:
+            run.bold = True
+            run.font.size = Pt(13)
+            para.paragraph_format.space_before = Pt(8)
+            para.paragraph_format.space_after = Pt(3)
+        else:
+            para.paragraph_format.space_after = Pt(2)
+
+    doc.save(str(out))
+    logger.info("定制化简历已保存: %s", out)
+    return str(out)
+
+
+def write_interview_advice_docx(advice_text: str, output_docx: str) -> str:
+    """将面试建议（Markdown 文本）渲染为 Word 文档。
+
+    支持 # / ## / ### 标题、- 无序列表、1. 有序列表、普通段落。
+
+    Args:
+        advice_text: 面试建议 Markdown 文本（来自 interview_advisor.build_interview_advice）
+        output_docx: 输出 docx 路径
+
+    Returns:
+        输出 docx 绝对路径
+
+    Raises:
+        ValueError: 面试建议文本为空
+    """
+    if not advice_text or not advice_text.strip():
+        raise ValueError("面试建议文本不能为空")
+
+    out = Path(output_docx)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
+    except ImportError as e:
+        raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "微软雅黑"
+    normal.font.size = Pt(10.5)
+
+    for line in advice_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if stripped.startswith("### "):
+            para = doc.add_paragraph()
+            run = para.add_run(stripped[4:])
+            run.bold = True
+            run.font.size = Pt(12)
+            para.paragraph_format.space_before = Pt(10)
+            para.paragraph_format.space_after = Pt(3)
+        elif stripped.startswith("## "):
+            para = doc.add_paragraph()
+            run = para.add_run(stripped[3:])
+            run.bold = True
+            run.font.size = Pt(14)
+            para.paragraph_format.space_before = Pt(14)
+            para.paragraph_format.space_after = Pt(4)
+        elif stripped.startswith("# "):
+            para = doc.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = para.add_run(stripped[2:])
+            run.bold = True
+            run.font.size = Pt(16)
+            para.paragraph_format.space_after = Pt(10)
+        elif stripped.startswith("- ") or stripped.startswith("• "):
+            para = doc.add_paragraph()
+            para.paragraph_format.left_indent = Pt(18)
+            para.paragraph_format.space_after = Pt(2)
+            para.add_run("• " + stripped.lstrip("-• ").strip())
+        elif stripped[0].isdigit() and ". " in stripped[:4]:
+            para = doc.add_paragraph()
+            para.paragraph_format.left_indent = Pt(18)
+            para.paragraph_format.space_after = Pt(2)
+            para.add_run(stripped)
+        else:
+            para = doc.add_paragraph()
+            para.paragraph_format.space_after = Pt(2)
+            para.add_run(stripped)
+
+    doc.save(str(out))
+    logger.info("面试建议已保存: %s", out)
+    return str(out)
 
 
 if __name__ == "__main__":
-    import sys
-
-    logging.basicConfig(level=logging.INFO)
-    sample = """姓名 / 联系方式
-张三 | 13800000000 | zhangsan@example.com
-
-求职目标
-资深 Python 后端工程师
-
-核心技能
-Python、Django、MySQL、Redis
-
-工作经历
-某公司 后端工程师（2020-2023）
-负责订单系统开发，日活提升 30%。"""
-    out = sys.argv[1] if len(sys.argv) > 1 else "output/demo.docx"
-    write_optimized_resume(sample, out)
+    print("resume_writer 模块自测：需要传入实际文件路径")
