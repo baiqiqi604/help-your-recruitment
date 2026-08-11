@@ -4,11 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>简历优化 Agent（LangGraph 版）</title>
+  <link rel="stylesheet" href="/static/tabler-icons/tabler-icons.min.css" />
   <style>
     :root {
-      --primary: #4f46e5;
-      --primary-dark: #4338ca;
-      --primary-light: #eef2ff;
+      --primary: #0d9488;
+      --primary-dark: #0f766e;
+      --primary-light: #f0fdfa;
       --bg: #f6f7f9;
       --card-bg: #ffffff;
       --border: #e5e7eb;
@@ -47,7 +48,7 @@
     header .brand { display: flex; align-items: center; gap: 12px; }
     header .logo {
       width: 36px; height: 36px; border-radius: 10px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #14b8a6, #10b981);
       display: flex; align-items: center; justify-content: center;
       color: #fff; font-size: 18px;
     }
@@ -70,7 +71,7 @@
     .tab-btn:hover { background: var(--primary-light); color: var(--primary); }
     .tab-btn.active {
       background: var(--primary); color: #fff;
-      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
+      box-shadow: 0 2px 8px rgba(13, 148, 136, 0.3);
     }
 
     /* ── 面板 / 卡片 ── */
@@ -106,8 +107,37 @@
     }
     .msg.user .bubble { background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
     .msg.assistant .bubble { background: #fff; border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+    .source-tag {
+      display: inline-block; font-size: 12px; font-weight: 600;
+      padding: 2px 8px; border-radius: 10px; margin-bottom: 6px;
+    }
+    .source-tag.rag { background: #ccfbf1; color: #0f766e; }
+    .source-tag.llm { background: #fef3c7; color: #b45309; }
+    .exp-jump-link {
+      margin-top: 4px; padding: 6px 10px; border-radius: 8px;
+      background: #f1f5f9; border: 1px solid var(--border);
+      font-size: 13px; color: var(--primary); cursor: pointer;
+    }
+    .exp-jump-link:hover { background: #ccfbf1; border-color: #5eead4; }
     .chat-input-row { display: flex; gap: 10px; margin-top: 14px; }
     .chat-input-row input { flex: 1; }
+    /* 大模型思考中 loading */
+    .msg.assistant .bubble.thinking {
+      display: flex; align-items: center; gap: 10px;
+      color: var(--text-muted); font-size: 13px;
+    }
+    .thinking-dots { display: inline-flex; gap: 5px; }
+    .thinking-dots span {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--primary); opacity: 0.35;
+      animation: dot-pulse 1.2s infinite ease-in-out;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dot-pulse {
+      0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+      40% { opacity: 1; transform: scale(1); }
+    }
 
     /* ── 表单 ── */
     .form-row { margin-bottom: 16px; }
@@ -118,13 +148,13 @@
     .hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
     textarea, input[type="text"], select {
       width: 100%; padding: 10px 12px;
-      border: 1px solid var(--border); border-radius: 8px;
+      border: 1px solid var(--border); border-radius: 10px;
       font-size: 14px; font-family: inherit; color: var(--text);
       background: #fff; transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     textarea:focus, input[type="text"]:focus, select:focus {
       outline: none; border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+      box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
     }
     textarea { resize: vertical; line-height: 1.6; }
     input[type="file"] {
@@ -135,8 +165,8 @@
     .flex-row .grow { flex: 1; min-width: 120px; }
     .flex-row .grow-2 { flex: 2; min-width: 200px; }
     .upload-input { flex: 1; }
-    .btn-violet { background: #7c3aed; }
-    .btn-violet:hover { background: #6d28d9; }
+    .btn-violet { background: #0f766e; }
+    .btn-violet:hover { background: #115e59; }
     .exp-results {
       max-height: 400px; overflow-y: auto;
       border: 1px solid var(--border); border-radius: 8px;
@@ -146,18 +176,18 @@
     /* ── 按钮 ── */
     button.primary {
       background: var(--primary); color: #fff; border: none;
-      padding: 10px 22px; border-radius: 8px; cursor: pointer;
+      padding: 10px 22px; border-radius: 10px; cursor: pointer;
       font-size: 14px; font-weight: 500;
-      transition: background 0.15s ease, transform 0.1s ease;
+      transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
     }
-    button.primary:hover { background: var(--primary-dark); }
+    button.primary:hover { background: var(--primary-dark); box-shadow: 0 3px 10px rgba(13, 148, 136, 0.25); }
     button.primary:active { transform: scale(0.98); }
-    button.primary:disabled { background: #a5b4fc; cursor: not-allowed; }
+    button.primary:disabled { background: #99f6e4; cursor: not-allowed; }
 
     /* ── 状态条 ── */
     .status { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; display: none; }
     .status.error { display: block; background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
-    .status.loading { display: block; background: var(--primary-light); color: var(--primary-dark); border: 1px solid #c7d2fe; }
+    .status.loading { display: block; background: var(--primary-light); color: var(--primary-dark); border: 1px solid #99f6e4; }
     .status.success { display: block; background: #f0fdf4; color: var(--success); border: 1px solid #bbf7d0; }
 
     /* ── 结果区 ── */
@@ -209,7 +239,7 @@
 <body>
   <header>
     <div class="brand">
-      <div class="logo">📄</div>
+      <div class="logo"><i class="ti ti-briefcase"></i></div>
       <div>
         <h1>简历优化 Agent</h1>
         <div class="sub">LangGraph 定制流水线 · 面试题库 · 求职建议</div>
@@ -218,19 +248,19 @@
   </header>
 
   <nav class="tabs">
-    <button class="tab-btn active" id="tab-chat-btn" onclick="switchTab('chat')">💬 聊天</button>
-    <button class="tab-btn" id="tab-opt-btn" onclick="switchTab('optimize')">📝 简历优化</button>
-    <button class="tab-btn" id="tab-exp-btn" onclick="switchTab('experience')">🎯 面试题库</button>
+    <button class="tab-btn active" id="tab-chat-btn" onclick="switchTab('chat')"><i class="ti ti-messages"></i> 面经咨询</button>
+    <button class="tab-btn" id="tab-opt-btn" onclick="switchTab('optimize')"><i class="ti ti-file-pencil"></i> 简历优化</button>
+    <button class="tab-btn" id="tab-exp-btn" onclick="switchTab('experience')"><i class="ti ti-target"></i> 面试题库</button>
   </nav>
 
   <!-- ═══ 聊天面板 ═══ -->
   <section class="panel active" id="panel-chat">
     <div class="card">
-      <div class="card-title">💬 智能对话</div>
-      <p class="card-desc">可让 Agent 分析岗位描述、优化简历、检索岗位知识库等。多轮对话自动记忆（session 隔离）。</p>
+      <div class="card-title"><i class="ti ti-messages"></i> 面经咨询</div>
+      <p class="card-desc">基于面试经验知识库（面经题库）回答面试相关问题：输入你的问题，自动检索相关面经题目并给出参考答案，覆盖 AI 产品经理等岗位的各轮面试。</p>
       <div id="chat-box"></div>
       <div class="chat-input-row">
-        <input type="text" id="chat-input" placeholder="输入你的问题，回车发送…" onkeydown="if(event.key==='Enter')sendChat()" />
+        <input type="text" id="chat-input" placeholder="输入面试问题，例如：RAG 是什么？大模型幻觉怎么解决？…" onkeydown="if(event.key==='Enter')sendChat()" />
         <button class="primary" id="chat-send-btn" onclick="sendChat()">发送</button>
       </div>
     </div>
@@ -239,7 +269,7 @@
   <!-- ═══ 优化面板 ═══ -->
   <section class="panel" id="panel-optimize">
     <div class="card">
-      <div class="card-title">📝 简历优化</div>
+      <div class="card-title"><i class="ti ti-file-pencil"></i> 简历优化</div>
       <p class="card-desc">上传或粘贴简历，填写目标公司与岗位 JD，生成定制化简历与面试建议。</p>
       <div class="status" id="opt-status"></div>
 
@@ -278,7 +308,7 @@
     </div>
 
     <div class="card" id="result">
-      <div class="card-title">🎯 定制化结果</div>
+      <div class="card-title"><i class="ti ti-clipboard-check"></i> 定制化结果</div>
       <p class="card-desc">优化完成后展示：公司判断、面试建议、匹配关系与生成文档。</p>
 
       <div class="form-row" id="doc-links" style="display:none;">
@@ -346,7 +376,7 @@
   <!-- ═══ 面试题库面板 ═══ -->
   <section class="panel" id="panel-experience">
     <div class="card">
-      <div class="card-title">🎯 面试题库</div>
+      <div class="card-title"><i class="ti ti-target"></i> 面试题库</div>
       <p class="card-desc">检索面试/笔试经验知识库（来自公开面经 + 手动录入，AI 结构化整理，仅供参考）。</p>
       <div class="status" id="exp-status"></div>
 
@@ -415,15 +445,50 @@
     const chatInput = document.getElementById("chat-input");
     const chatSendBtn = document.getElementById("chat-send-btn");
 
-    function appendMsg(role, text) {
+    function appendMsg(role, text, source, questions) {
       const div = document.createElement("div");
       div.className = "msg " + role;
       const bubble = document.createElement("div");
       bubble.className = "bubble";
-      bubble.textContent = text;
+      if (source) {
+        const tag = document.createElement("div");
+        tag.className = "source-tag " + (source === "rag" ? "rag" : "llm");
+        tag.innerHTML = source === "rag"
+          ? '<i class="ti ti-book"></i> 来源：面经题库'
+          : '<i class="ti ti-robot"></i> 来源：大模型回答';
+        bubble.appendChild(tag);
+      }
+      const body = document.createElement("div");
+      body.textContent = text;
+      bubble.appendChild(body);
+      if (source === "rag" && questions && questions.length) {
+        const qsTitle = document.createElement("div");
+        qsTitle.style.cssText = "font-weight:600; margin-top:10px; margin-bottom:4px;";
+        qsTitle.innerHTML = '<i class="ti ti-pin"></i> 相关面试题（点击查看详情）';
+        bubble.appendChild(qsTitle);
+        questions.forEach(function (q, idx) {
+          const link = document.createElement("div");
+          link.className = "exp-jump-link";
+          link.textContent = (idx + 1) + ". " + (q.question || "（无题目）");
+          link.onclick = function () { jumpToExpQuestion(q, questions); };
+          bubble.appendChild(link);
+        });
+      }
       div.appendChild(bubble);
       chatBox.appendChild(div);
       chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    // 点击相关面试题：跳转到「面试题库」Tab 并进入该题详情界面
+    function jumpToExpQuestion(q, relatedList) {
+      switchTab("experience");
+      if (relatedList && relatedList.length) {
+        // 让「返回列表」能回到这组相关题目
+        expAllQuestions = relatedList;
+        expPage = 1;
+      }
+      setExpStatus("success", "已从面经咨询跳转，展示题目详情：");
+      showExpDetail(q);
     }
 
     async function sendChat() {
@@ -435,6 +500,9 @@
       chatInput.value = "";
       chatSendBtn.disabled = true;
 
+      // 大模型思考中：先显示 loading 气泡
+      const thinking = appendThinking();
+
       try {
         const resp = await fetch("/api/chat", {
           method: "POST",
@@ -444,14 +512,35 @@
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "请求失败");
         const reply = data.reply || "（无回复）";
+        const source = data.source === "llm" ? "llm" : "rag";
         chatHistory.push({ role: "assistant", content: reply });
-        appendMsg("assistant", reply);
+        appendMsg("assistant", reply, source, data.questions || []);
       } catch (err) {
         appendMsg("assistant", "出错了：" + err.message);
       } finally {
+        removeThinking(thinking);
         chatSendBtn.disabled = false;
         chatInput.focus();
       }
+    }
+
+    // 思考中 loading 气泡
+    function appendThinking() {
+      const div = document.createElement("div");
+      div.className = "msg assistant";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble thinking";
+      bubble.innerHTML =
+        '<span>大模型思考中</span>' +
+        '<span class="thinking-dots"><span></span><span></span><span></span></span>';
+      div.appendChild(bubble);
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      return div;
+    }
+
+    function removeThinking(el) {
+      if (el && el.parentNode) { el.parentNode.removeChild(el); }
     }
 
     // ── 优化 ──
@@ -480,14 +569,24 @@
         if (!resp.ok) throw new Error(data.detail || "上传解析失败");
 
         document.getElementById("resume-text").value = data.text || "";
-        hint.textContent = "✅ 已解析 " + data.filename + "，共 " + (data.text || "").length + " 字，已填入简历文本区（可继续编辑）。";
-        hint.style.color = "#15803d";
+        setUploadHint("ti-check", "已解析 " + data.filename + "，共 " + (data.text || "").length + " 字，已填入简历文本区（可继续编辑）。", "#15803d");
       } catch (err) {
-        hint.textContent = "❌ " + err.message;
-        hint.style.color = "#b91c1c";
+        setUploadHint("ti-x", err.message, "#b91c1c");
       } finally {
         btn.disabled = false;
       }
+    }
+
+    // 上传状态提示：图标（Tabler）+ 文本，文本以 textContent 写入避免注入
+    function setUploadHint(iconClass, message, color) {
+      const hint = document.getElementById("upload-hint");
+      hint.textContent = "";
+      const icon = document.createElement("i");
+      icon.className = "ti " + iconClass;
+      icon.style.marginRight = "4px";
+      hint.appendChild(icon);
+      hint.appendChild(document.createTextNode(message));
+      hint.style.color = color;
     }
 
     async function runOptimize() {
@@ -540,10 +639,10 @@
       if (!resumeDocx && !adviceDocx) { box.style.display = "none"; return; }
       const links = [];
       if (resumeDocx) {
-        links.push('📄 <a href="/api/download?filename=' + encodeURIComponent(resumeDocx) + '" target="_blank">定制化简历（Word）</a>');
+        links.push('<i class="ti ti-file-download"></i> <a href="/api/download?filename=' + encodeURIComponent(resumeDocx) + '" target="_blank">定制化简历（Word）</a>');
       }
       if (adviceDocx) {
-        links.push('🎯 <a href="/api/download?filename=' + encodeURIComponent(adviceDocx) + '" target="_blank">面试建议（Word）</a>');
+        links.push('<i class="ti ti-message-dots"></i> <a href="/api/download?filename=' + encodeURIComponent(adviceDocx) + '" target="_blank">面试建议（Word）</a>');
       }
       content.innerHTML = links.join("　|　");
       box.style.display = "block";
@@ -560,15 +659,18 @@
     const EXP_PAGE_SIZE = 10;
     let expAllQuestions = [];   // 当前检索的全部结果
     let expPage = 1;            // 当前页码（从 1 开始）
+    let expDetailMode = false;  // 是否处于单题详情界面
 
     function renderExpResults(questions) {
       expAllQuestions = questions || [];
       expPage = 1;
+      expDetailMode = false;
       renderExpPage();
     }
 
     function renderExpPage() {
       const box = document.getElementById("exp-results");
+      if (expDetailMode) return;  // 详情界面由 showExpDetail 接管
       if (!expAllQuestions.length) {
         box.innerHTML = '<p class="hint" style="margin:0;">暂无检索结果。可先点击「笔试算法题」查看算法题。</p>';
         return;
@@ -581,7 +683,9 @@
       box.innerHTML = "";
       pageQuestions.forEach(function (q) {
         const item = document.createElement("div");
-        item.style.cssText = "padding:10px; border-bottom:1px solid #e5e7eb;";
+        item.style.cssText = "padding:10px; border-bottom:1px solid #e5e7eb; cursor:pointer;";
+        item.title = "点击查看该题详情";
+        item.onclick = function () { showExpDetail(q); };
         item.innerHTML =
           '<div style="font-weight:600;">' + (q.question || "") + '</div>' +
           '<div class="hint" style="margin-top:4px;">' +
@@ -591,15 +695,7 @@
           '质量 ' + (q.quality || 3) + '/5' +
           (q.is_algorithm ? " · 算法题" : "") +
           '</div>' +
-          ((q.key_points && q.key_points.length)
-            ? '<div class="hint" style="margin-top:2px;">考察点：' + q.key_points.join("、") + '</div>'
-            : "") +
-          (q.reference_answer
-            ? '<div style="margin-top:4px; font-size:13px; white-space:pre-wrap;">参考：' + q.reference_answer + '</div>'
-            : "") +
-          (q.source_url
-            ? '<div class="hint" style="margin-top:2px;">来源：<a href="' + q.source_url + '" target="_blank">' + q.source_url + '</a></div>'
-            : "");
+          '<div class="hint" style="margin-top:2px; color:#0d9488;">点击查看详情 <i class="ti ti-arrow-right"></i></div>';
         box.appendChild(item);
       });
 
@@ -608,12 +704,12 @@
       pager.style.cssText = "display:flex; align-items:center; justify-content:center; gap:12px; padding:12px 0 4px;";
       const prevBtn = document.createElement("button");
       prevBtn.className = "primary";
-      prevBtn.textContent = "← 上一页";
+      prevBtn.innerHTML = '<i class="ti ti-arrow-left"></i> 上一页';
       prevBtn.disabled = expPage <= 1;
       prevBtn.onclick = function () { if (expPage > 1) { expPage--; renderExpPage(); } };
       const nextBtn = document.createElement("button");
       nextBtn.className = "primary";
-      nextBtn.textContent = "下一页 →";
+      nextBtn.innerHTML = '下一页 <i class="ti ti-arrow-right"></i>';
       nextBtn.disabled = expPage >= totalPages;
       nextBtn.onclick = function () { if (expPage < totalPages) { expPage++; renderExpPage(); } };
       const info = document.createElement("span");
@@ -623,6 +719,72 @@
       pager.appendChild(info);
       pager.appendChild(nextBtn);
       box.appendChild(pager);
+    }
+
+    // 单题详情界面（点击题目进入；题库内点击与面经咨询跳转共用）
+    function showExpDetail(q) {
+      expDetailMode = true;
+      const box = document.getElementById("exp-results");
+      box.innerHTML = "";
+
+      // 返回按钮
+      const backBtn = document.createElement("button");
+      backBtn.className = "primary";
+      backBtn.innerHTML = '<i class="ti ti-arrow-left"></i> 返回列表';
+      backBtn.style.cssText = "margin-bottom:12px;";
+      backBtn.onclick = function () { expDetailMode = false; renderExpPage(); };
+      box.appendChild(backBtn);
+
+      // 题干
+      const title = document.createElement("div");
+      title.style.cssText = "font-size:16px; font-weight:700; line-height:1.5; margin-bottom:8px;";
+      title.textContent = q.question || "（无题目）";
+      box.appendChild(title);
+
+      // 元信息
+      const meta = document.createElement("div");
+      meta.style.cssText = "font-size:13px; color:#6b7280; margin-bottom:10px;";
+      const metaParts = [
+        "轮次：" + (q.stage || "通用"),
+        "类型：" + (q.question_type || "面试问答"),
+        "岗位：" + (q.role || "未标注"),
+      ];
+      if (q.company) metaParts.push("公司：" + q.company);
+      metaParts.push("质量 " + (q.quality || 3) + "/5");
+      if (q.is_algorithm) metaParts.push("算法题");
+      meta.textContent = metaParts.join(" · ");
+      box.appendChild(meta);
+
+      // 考察点
+      if (q.key_points && q.key_points.length) {
+        const kp = document.createElement("div");
+        kp.style.cssText = "font-size:13px; color:#b45309; margin-bottom:10px;";
+        kp.textContent = "考察点：" + q.key_points.join("、");
+        box.appendChild(kp);
+      }
+
+      // 参考答案
+      if (q.reference_answer) {
+        const ansTitle = document.createElement("div");
+        ansTitle.style.cssText = "font-weight:600; margin:6px 0 4px;";
+        ansTitle.textContent = "参考答案";
+        box.appendChild(ansTitle);
+        const ans = document.createElement("div");
+        ans.style.cssText = "font-size:14px; line-height:1.7; white-space:pre-wrap; word-break:break-word;";
+        ans.textContent = q.reference_answer;
+        box.appendChild(ans);
+      }
+
+      // 来源
+      if (q.source_url) {
+        const src = document.createElement("div");
+        src.style.cssText = "font-size:13px; color:#6b7280; margin-top:12px;";
+        src.innerHTML = '来源：<a href="' + q.source_url + '" target="_blank">' + q.source_url + '</a>';
+        box.appendChild(src);
+      }
+
+      // 滚动到结果区
+      box.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
     async function searchExp() {
@@ -728,7 +890,7 @@
     }
 
     // 启动时显示欢迎语
-    appendMsg("assistant", "你好！我是简历优化 Agent（LangGraph 版）。\n我可以：\n1. 分析岗位描述（JD）\n2. 针对 JD 优化你的简历\n3. 检索岗位知识库 / 获取优质岗位推荐");
+    appendMsg("assistant", "你好！我是面经咨询助手 📚\n输入面试相关的问题，我会先从面经题库检索答案（标注「来源：面经题库」）；若题库未收录，则由大模型回答（标注「来源：大模型回答」）。\n试试：\n1. RAG 是什么？怎么给产品经理解释？\n2. 大模型幻觉问题怎么解决？\n3. AI 产品经理的日常工作产出物有哪些？");
   </script>
 </body>
 </html>

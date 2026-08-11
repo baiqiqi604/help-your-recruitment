@@ -23,6 +23,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from config import LLM_CONFIG, PATH_CONFIG
@@ -34,6 +35,12 @@ app = FastAPI(
     description="基于 LangGraph 的简历优化 Agent：Chat 对话 + 简历优化 + 岗位知识库检索",
     version="1.0.0",
 )
+
+# 静态资源（Tabler Icons 等本地化文件），目录不存在时跳过挂载；
+# 跟随 PATH_CONFIG 的 BASE_DIR（打包后为 exe 目录，由启动器补齐）
+_STATIC_DIR = Path(PATH_CONFIG["templates_dir"]).parent / "static"
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 RUNTIME_DEPENDENCIES = {
     "langgraph": "langgraph",
@@ -97,9 +104,15 @@ def index() -> str:
 # ──────────────────────────────────────────────
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> dict[str, Any]:
-    """多轮对话接口：调用 LangGraph ReAct Agent（带记忆）。"""
-    from agent import chat_with_agent
+    """面经咨询接口：RAG 优先答疑（聊天式）。
 
+    流程：
+        1. 先检索面经题库（interview_kb）；
+        2. 命中（非空）→ 大模型基于命中的面经内容总结成连贯答案，末尾附相关面试题，source=rag；
+        3. 未命中 → 调用大模型直接回答，source=llm，回复中标注「本题库暂无收录，以下为模型回答」。
+    Returns:
+        {"reply": 回答文本, "source": "rag"|"llm", "questions": 命中的题目列表, "session_id": ...}
+    """
     session_id = request.session_id.strip() or f"session-{uuid.uuid4().hex[:12]}"
 
     # 取最后一条用户消息
@@ -112,13 +125,89 @@ def chat(request: ChatRequest) -> dict[str, Any]:
     if not user_input:
         raise HTTPException(status_code=400, detail="缺少用户消息内容")
 
-    logger.info("/api/chat：session=%s 开始对话", session_id)
+    logger.info("/api/chat：session=%s 收到输入 %d 字", session_id, len(user_input))
+
+    from interview_knowledge_base import search_questions
+
     try:
-        reply = chat_with_agent(user_input, session_id)
+        # 命中判定阈值 0.45（cosine 距离）：相关题目 top1 一般 ≤0.31，无关问题 ≥0.5；
+        # top_k 提到 8，配合 interview_knowledge_base 的关键词兜底，提高召回
+        hits = search_questions(user_input, top_k=8, max_distance=0.45)
     except Exception as e:  # noqa: BLE001
-        logger.exception("/api/chat failed")
+        logger.exception("面经检索失败，回退到模型回答")
+        hits = []
+
+    if hits:
+        # ── RAG 命中：LLM 基于面经内容总结回答 + 附相关面试题 ──
+        reply = _summarize_kb_answer(user_input, hits)
+        return {"reply": reply, "source": "rag", "questions": hits, "session_id": session_id}
+
+    # ── 未命中：大模型直接回答并标注 ──
+    import llm_client
+
+    try:
+        model_answer = llm_client.chat(user_input)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("大模型回答失败")
         raise HTTPException(status_code=503, detail="对话服务暂时不可用") from e
-    return {"reply": reply, "session_id": session_id}
+
+    answer = "【本题库暂无收录，以下为模型回答】\n\n" + str(model_answer).strip()
+    return {"reply": answer, "source": "llm", "questions": [], "session_id": session_id}
+
+
+def _summarize_kb_answer(user_input: str, questions: list[dict[str, Any]]) -> str:
+    """让 LLM 基于命中的面经内容总结成连贯答案（相关面试题由前端渲染可点击列表）。
+
+    LLM 调用失败时回退为逐条整理（_format_kb_reply）。
+    """
+    import llm_client
+
+    kb_text = ""
+    # 只取前 4 道用于总结（完整列表由前端渲染），控制 prompt 长度以加快响应
+    for i, q in enumerate(questions[:4], start=1):
+        kb_text += f"{i}. 题目：{q.get('question', '')}\n"
+        key_points = q.get("key_points") or []
+        if key_points:
+            kb_text += f"   考察点：{'、'.join(key_points)}\n"
+        if q.get("reference_answer"):
+            ans = str(q["reference_answer"])
+            if len(ans) > 600:
+                ans = ans[:600] + "…（已截断）"
+            kb_text += f"   参考答案：{ans}\n"
+
+    system = (
+        "你是求职面试答疑助手。请基于下方提供的「面经题库内容」，用通俗清晰的语言"
+        "总结回答用户的问题，输出一段连贯的答案：不要逐条罗列题目，不要提“题库”字样，"
+        "也不要输出面试题列表。内容必须来源于题库材料，不要编造；材料未覆盖的部分明确说明。"
+    )
+    prompt = f"用户问题：{user_input}\n\n【面经题库内容】\n{kb_text}"
+    try:
+        # 总结类短回答：max_tokens=1500 即可，显著加快响应
+        summary = llm_client.chat(prompt, system, max_tokens=1500)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("LLM 总结失败，回退为直接整理: %s", e)
+        return _format_kb_reply(user_input, questions)
+    return str(summary).strip()
+
+
+def _format_kb_reply(user_input: str, questions: list[dict[str, Any]]) -> str:
+    """将 RAG 命中的题目整理为面向用户的咨询回答文本。"""
+    parts = ["【来自面经题库】为你找到 " + str(len(questions)) + " 道相关面试题，供参考：", ""]
+    for i, q in enumerate(questions, start=1):
+        parts.append(f"{i}. {q.get('question', '')}")
+        tags = " / ".join(
+            str(q.get(k, "") or "") for k in ("stage", "question_type")
+            if q.get(k)
+        )
+        if tags:
+            parts.append(f"   （{tags}）")
+        key_points = q.get("key_points") or []
+        if key_points:
+            parts.append("   考察点：" + "、".join(key_points))
+        if q.get("reference_answer"):
+            parts.append("   参考答案：" + str(q["reference_answer"]))
+        parts.append("")
+    return "\n".join(parts).rstrip()
 
 
 # ──────────────────────────────────────────────

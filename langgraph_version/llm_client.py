@@ -240,9 +240,8 @@ def _mock_chat(prompt: str, system: str | None = None) -> str:
     return "（MOCK）你好，我是简历优化助手。当前为演示模式，配置 API Key 后可提供真实分析与优化服务。"
 
 
-@lru_cache(maxsize=1)
-def get_llm():
-    """获取当前 Provider 的 ChatOpenAI 客户端（单例缓存）。"""
+def _make_llm(max_tokens: int | None = None):
+    """构建 ChatOpenAI 客户端；max_tokens 可覆盖全局配置（用于短输出场景提速）。"""
     try:
         from langchain_openai import ChatOpenAI
     except ImportError as e:
@@ -269,20 +268,30 @@ def get_llm():
         api_key=api_key,
         base_url=LLM_CONFIG["base_url"],
         temperature=LLM_CONFIG["temperature"],
-        max_tokens=LLM_CONFIG["max_tokens"],
+        max_tokens=max_tokens or LLM_CONFIG["max_tokens"],
         timeout=LLM_CONFIG["timeout"],
     )
 
 
-def chat(prompt: str, system: str | None = None) -> str:
-    """发送单轮对话请求，返回模型文本响应。"""
+@lru_cache(maxsize=1)
+def get_llm():
+    """获取当前 Provider 的 ChatOpenAI 客户端（单例缓存）。"""
+    return _make_llm()
+
+
+def chat(prompt: str, system: str | None = None, max_tokens: int | None = None) -> str:
+    """发送单轮对话请求，返回模型文本响应。
+
+    max_tokens: 可选覆盖输出上限（默认用全局配置 4096；总结/答疑类短回答
+    可传更小值以显著加快响应）。
+    """
     if mock_enabled():
         logger.info("[MOCK] 返回模拟 LLM 响应")
         return _mock_chat(prompt, system)
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    llm = get_llm()
+    llm = get_llm() if max_tokens is None else _make_llm(max_tokens=max_tokens)
     messages = []
     if system:
         messages.append(SystemMessage(content=system))

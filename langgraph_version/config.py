@@ -9,12 +9,17 @@
 """
 
 import os
+import sys
 from pathlib import Path
 
 # ──────────────────────────────────────────────
 # 项目根目录
 # ──────────────────────────────────────────────
-BASE_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包后：以 exe 所在目录为根（可写，数据文件由桌面启动器首启补齐）
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 
 # 尝试加载 .env（失败则忽略，依赖环境变量）
 try:
