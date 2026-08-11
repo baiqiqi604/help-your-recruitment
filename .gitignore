@@ -14,13 +14,20 @@ venv/
 *.log
 web_out.log
 web_err.log
+web_run.log
 .env
 
 # ── 数据目录(保留 .gitkeep)──
 **/data/chroma_db/*
+**/data/chroma_db_backup_*/
 **/data/crawled_jobs/*
 **/data/raw/*
 !**/data/**/.gitkeep
+
+# ── 打包产物目录(保留源码)──
+**/desktop/build/
+**/desktop/dist/
+*.spec.bak
 
 # ── 输出产物目录(保留 .gitkeep)──
 **/output/*
