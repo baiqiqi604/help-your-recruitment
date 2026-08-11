@@ -61,7 +61,7 @@ SYSTEM_PROMPT = """你是一位专业的求职答疑助手，服务求职者与�
 # 工具定义
 # ──────────────────────────────────────────────
 @tool
-def answer_from_kb(question: str, top_k: int = 5) -> list[dict[str, Any]]:
+def answer_from_kb(question: str, top_k: int = 8) -> list[dict[str, Any]]:
     """从面试/笔试经验知识库（RAG）检索与 question 相关的题目及答案。
 
     用于回答用户提出的面试/求职/技术类问题：先查题库看是否已有收录，
@@ -70,7 +70,13 @@ def answer_from_kb(question: str, top_k: int = 5) -> list[dict[str, Any]]:
     from interview_knowledge_base import search_questions
 
     try:
-        return search_questions(question, top_k=top_k, max_distance=0.6)
+        hits = search_questions(question, top_k=top_k, max_distance=0.45)
+        # 截断超长参考答案，控制送入 Agent 的 prompt 长度以加快响应
+        for q in hits:
+            ans = q.get("reference_answer") or ""
+            if len(ans) > 600:
+                q["reference_answer"] = ans[:600] + "…（已截断）"
+        return hits
     except Exception as e:  # noqa: BLE001
         logger.warning("answer_from_kb 检索失败: %s", e)
         return []

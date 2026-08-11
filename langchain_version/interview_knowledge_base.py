@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -41,7 +42,12 @@ def _get_interview_collection():
     return client.get_or_create_collection(
         name=INTERVIEW_COLLECTION,
         embedding_function=_get_embedding_function(),
-        metadata={"hnsw:space": "cosine"},
+        # 关键：hnsw:sync_threshold 必须远大于批量导入条数。
+        # 默认 1000 时，单次导入 ≥1000 条会触发 Python 侧 _persist() 写出损坏的
+        # index_metadata.pickle（dimensionality=None），导致 Rust 核心跨进程加载报
+        # "Error loading hnsw index"；<1000 条不触发、由 Rust 核心从 sqlite 正常管理。
+        # 本项目两库合并共 1973 条，故设为 100000 永不触发。
+        metadata={"hnsw:space": "cosine", "hnsw:sync_threshold": 100000},
     )
 
 
@@ -218,7 +224,55 @@ def search_questions(
     filtered = [q for q in questions if q.get("distance") is None or q["distance"] <= max_distance]
     if len(filtered) < len(questions):
         logger.info("相似度过滤：%d 条 → %d 条（阈值 %.2f）", len(questions), len(filtered), max_distance)
+
+    # 关键词兜底：向量命中不足时，按词元子串匹配补召回（解决简写/专有名词漏召回）
+    if len(filtered) < min(top_k, 3):
+        kw_hits = _keyword_search(query.strip(), where, top_k)
+        seen_ids = {q.get("id") for q in filtered}
+        for q in kw_hits:
+            if q.get("id") and q["id"] not in seen_ids:
+                filtered.append(q)
+                seen_ids.add(q["id"])
+            if len(filtered) >= top_k:
+                break
+        if len(kw_hits):
+            logger.info("关键词兜底补充 %d 条", len(kw_hits))
     return filtered
+
+
+def _extract_keywords(query: str, max_kw: int = 6) -> list[str]:
+    """从查询中切出候选词元（英文词 / 中文连续片段），用于关键词兜底检索。"""
+    tokens: list[str] = []
+    # 英文/数字词
+    tokens += re.findall(r"[A-Za-z0-9+#.]+", query)
+    # 中文连续片段（按标点/空格切分）
+    cn_chunks = re.split(r"[，。！？、；：,.!?;:\s/\\()（）\[\]【】\"'“”]+", query)
+    for chunk in cn_chunks:
+        chunk = chunk.strip()
+        if chunk and len(chunk) >= 2 and chunk not in tokens:
+            tokens.append(chunk)
+    return tokens[:max_kw]
+
+
+def _keyword_search(query: str, where: Any, top_k: int) -> list[dict[str, Any]]:
+    """按词元子串（$contains）检索，作为向量检索的兜底。"""
+    keywords = _extract_keywords(query)
+    if not keywords:
+        return []
+    try:
+        collection = _get_interview_collection()
+        clauses = [{"$contains": kw} for kw in keywords]
+        where_document = clauses[0] if len(clauses) == 1 else {"$or": clauses}
+        results = collection.query(
+            query_texts=[query],
+            n_results=top_k,
+            where=where,
+            where_document=where_document,
+        )
+        return _format_results(results)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("关键词兜底检索失败: %s", e)
+        return []
 
 
 def get_questions_by_company(company: str, top_k: int = 20) -> list[dict[str, Any]]:
@@ -320,11 +374,23 @@ def _format_get_results(results: Any) -> list[dict[str, Any]]:
     return questions
 
 
+# 文档字段标签（用于多行字段提取时识别边界）
+_FIELD_LABELS = ("公司：", "岗位：", "轮次：", "题目类型：", "题目：", "考察点：", "参考思路：", "来源：")
+
+
 def _extract_field(doc: str, label: str) -> str:
-    """从 Document 文本中提取指定标签字段。"""
-    for line in (doc or "").splitlines():
-        if line.startswith(f"{label}："):
-            return line.split("：", 1)[1].strip()
+    """从 Document 文本中提取指定标签字段（支持跨多行，遇到下一标签结束）。"""
+    target = f"{label}："
+    lines = (doc or "").splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(target):
+            parts = [line.split("：", 1)[1].strip()]
+            for j in range(i + 1, len(lines)):
+                nxt = lines[j]
+                if nxt.startswith(_FIELD_LABELS):
+                    break
+                parts.append(nxt.strip())
+            return " ".join(p for p in parts if p).strip()
     return ""
 
 

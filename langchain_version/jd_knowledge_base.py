@@ -128,9 +128,13 @@ class BGEEmbeddingFunction:
         return embeddings.tolist()
 
     def embed_query(self, input: str | list[str]) -> list[float] | list[list[float]]:
-        """chromadb query 时调用；入参可能是单个字符串或字符串列表。"""
+        """chromadb query 时调用；入参可能是单个字符串或字符串列表。
+
+        BGE 官方建议检索 query 加指令前缀（入库文档不加），可提升命中率。
+        """
         texts = [input] if isinstance(input, str) else list(input)
-        return self(texts)
+        prefixed = ["为这个句子生成表示以用于检索相关文章：" + t for t in texts]
+        return self(prefixed)
 
 
 @lru_cache(maxsize=1)
