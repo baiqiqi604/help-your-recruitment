@@ -113,7 +113,7 @@ def analyze_jd(jd_text: str, resume_text: str = "") -> dict[str, Any]:
 
     prompt = JD_ANALYZE_PROMPT.format(jd_text=text, resume_block=resume_block)
     logger.info("调用 LLM 完整拆解岗位需求...")
-    result = llm_client.chat_json(prompt)
+    result = llm_client.chat_json(prompt, mock_scenario="analyze_jd")
 
     analysis = _normalize_analysis(result)
     logger.info(

@@ -132,7 +132,7 @@ def research_company(
     )
 
     logger.info("research_company：分析目标公司 %s ...", company)
-    result = llm_client.chat_json(prompt)
+    result = llm_client.chat_json(prompt, mock_scenario="company_research")
     return _normalize_research(result)
 
 

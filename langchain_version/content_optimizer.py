@@ -124,7 +124,7 @@ def optimize_resume_content(resume_text: str, jd_analysis: dict[str, Any]) -> st
     )
 
     logger.info("调用 LLM 优化简历内容...")
-    optimized = llm_client.chat(prompt).strip()
+    optimized = llm_client.chat(prompt, mock_scenario="optimize_resume").strip()
 
     if not optimized:
         raise ValueError("模型返回的优化结果为空")
@@ -182,7 +182,7 @@ def build_matching_table(
 
     logger.info("调用 LLM 构建匹配关系表...")
     try:
-        raw_rows = llm_client.chat_json_array(prompt)
+        raw_rows = llm_client.chat_json_array(prompt, mock_scenario="matching_table")
         return _normalize_matching_rows(raw_rows)
     except ValueError as e:
         logger.warning("匹配关系表解析失败: %s", e)

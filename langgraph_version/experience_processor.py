@@ -87,7 +87,7 @@ def process_raw_item(item: dict[str, Any]) -> list[dict[str, Any]]:
     )
     logger.info("process_raw_item：结构化素材 %s（%d 字）", source_label, len(content))
     try:
-        raw = llm_client.chat_json_array(prompt)
+        raw = llm_client.chat_json_array(prompt, mock_scenario="experience_processing")
     except Exception as e:  # noqa: BLE001
         logger.warning("素材结构化失败 %s: %s", source_label, e)
         return []

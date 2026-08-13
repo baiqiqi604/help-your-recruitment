@@ -10,36 +10,43 @@
 
 | 模块 | 说明 |
 |------|------|
-| 简历优化流水线 | LangGraph StateGraph 编排：加载简历 → 分析 JD → 优化 → LLM 审核 → 重试/输出 |
-| 对话 Agent | `create_react_agent` + `MemorySaver`，按 session（thread_id）多轮记忆 |
+| 简历优化流水线 | LangGraph StateGraph 编排：加载简历 → 分析 JD → 公司分析 → 优化 → LLM 审核 → 面试建议 → 双文档输出 |
+| 对话 Agent | `langchain.agents.create_agent` + `MemorySaver`，按 session（thread_id）多轮记忆 |
 | 简历读取 | PDF → Word（pdf2docx）+ python-docx 提取段落/表格/全文 |
 | 格式输出 | 优化结果写回 Word 保留格式，可选导出 PDF（docx2pdf） |
 | 岗位知识库 | ChromaDB + BGE 中文 Embedding（`BGEEmbeddingFunction`），语义检索/优质岗位 |
-| 岗位爬虫 | httpx + BeautifulSoup 骨架，`crawl_jobs` / `save_jobs` 单点失败不崩溃 |
-| 定时任务 | APScheduler 每日定时爬取 + 知识库增量更新 |
+| 面试题库（RAG） | ChromaDB `interview_kb` 集合：语义检索 + 关键词兜底 + 阈值过滤 |
+| 面经导入 | `_ingest_experiences.py` / `_ingest_ai_pm_bank.py` 等一次性导入脚本 |
 
 ## 项目结构
 
 ```
 langgraph_version/
-├── config.py                 # 全局配置（LLM / 向量库 / 路径 / 爬虫 / 调度）
+├── config.py                 # 全局配置（LLM / 向量库 / 路径 / 爬虫）
 ├── llm_client.py             # 多 Provider LLM 客户端（DeepSeek/OpenAI/通义/智谱）
+├── graph.py                  # ★ LangGraph StateGraph 优化流水线
+├── agent.py                  # ★ LangGraph 对话 Agent（MemorySaver 记忆）
 ├── jd_analyzer.py            # 岗位分析（大模型提取结构化需求）
+├── company_researcher.py     # 目标公司调研与求职判断
 ├── content_optimizer.py      # 简历优化 + 匹配关系表
+├── interview_advisor.py      # 面试问题生成 + 面试建议
 ├── resume_reader.py          # PDF→Word→文本
 ├── resume_writer.py          # 写回 Word + 导出 PDF
-├── jd_knowledge_base.py      # ChromaDB + BGE 知识库（init_kb / add_jobs / search_jds / get_job_by_id / get_premium_jobs）
-├── jd_crawler.py             # 爬虫骨架（crawl_jobs / save_jobs 等）
-├── scheduler.py              # APScheduler 定时任务（start_scheduler）
-├── graph.py                  # ★ LangGraph StateGraph 优化流水线
-├── agent.py                  # ★ LangGraph ReAct 对话 Agent（MemorySaver 记忆）
+├── interview_knowledge_base.py # 面试题库检索层（ChromaDB interview_kb）
+├── jd_knowledge_base.py      # 岗位库（已降级，可选）
+├── experience_crawler.py     # 面经抓取 / 手动素材保存
+├── experience_processor.py   # 面经 LLM 结构化加工
 ├── web_app.py                # FastAPI 服务
-├── main.py                   # CLI 入口（web / chat / optimize）
+├── main.py                   # CLI 入口（web / chat / optimize / doctor）
+├── validate_runtime.py       # 运行环境依赖校验（main.py doctor）
+├── test_core_pipeline.py     # 核心流水线测试（unittest）
+├── tests/                    # pytest 套件（图流程 / Web API / LLM JSON 解析）
 ├── templates/index.html      # 单页前端（聊天 + 优化，原生 JS/CSS，无 CDN）
 ├── requirements.txt
 ├── .env.example
 └── docs/
     ├── PRD.md
+    ├── 启动指南.md
     └── 技术开发文档.md
 ```
 
@@ -105,10 +112,11 @@ python main.py optimize --resume input/我的简历.docx --job-id boss_xxxx
 
 ### graph.py — LangGraph 优化流水线
 
-State（TypedDict）：`resume_text / jd_text / jd_analysis / optimized_text / matching_table / error / attempts`。
+State（TypedDict）：`resume_text / jd_text / target_company / jd_analysis / company_research / optimized_text / matching_table / interview_questions / interview_advice / resume_docx_path / advice_docx_path / error / attempts`。
 
-节点：`load_resume → analyze_jd → optimize → review → write_output`；
-条件边：`review` 通过 → `write_output → END`；不通过且 `attempts < 3` 回到 `optimize`（attempts+1）；超限 → `END`。
+节点（7 个）：`load_resume → analyze_jd → research_company → optimize → review → interview → write_output`；
+每阶段结束路由：成功 → 下一节点；任一阶段报错 → 直接 `END`（不再带着无效状态重试）。
+条件边 `review`：通过 → `interview`；不通过且 `attempts < 3` → 回到 `optimize`（attempts+1）；重试超限 → `END`。
 
 ```python
 from graph import build_graph, run_optimize

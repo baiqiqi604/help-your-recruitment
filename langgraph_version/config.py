@@ -112,16 +112,41 @@ PATH_CONFIG = {
 # ──────────────────────────────────────────────
 # 爬虫配置
 # ──────────────────────────────────────────────
+# 额外爬取关键词/平台：内置默认 + 环境变量扩展（CRAWLER_EXTRA_KEYWORDS /
+# CRAWLER_EXTRA_PLATFORMS，逗号分隔），去重后写入配置。
+_EXTRA_CRAWLER_KEYWORDS = ["Go", "C++", "人工智能", "数据开发", "网络安全"]
+_ENV_EXTRA_CRAWLER_KEYWORDS = [
+    keyword.strip()
+    for keyword in os.getenv("CRAWLER_EXTRA_KEYWORDS", "").split(",")
+    if keyword.strip()
+]
+_ENV_EXTRA_CRAWLER_PLATFORMS = [
+    platform.strip()
+    for platform in os.getenv("CRAWLER_EXTRA_PLATFORMS", "").split(",")
+    if platform.strip()
+]
+
 CRAWLER_CONFIG = {
     # 岗位爬虫总开关：默认关闭（岗位库已降级，主流程不再依赖）
     # 如需启用：CRAWLER_ENABLED=1（并配置对应平台 Cookie）
     "enabled": os.getenv("CRAWLER_ENABLED", "0") != "0",
-    "platforms": ["boss", "lagou", "liepin", "zhilian", "jobui", "51job"],
+    "platforms": list(
+        dict.fromkeys(
+            ["boss", "lagou", "liepin", "zhilian", "jobui", "51job"]
+            + _ENV_EXTRA_CRAWLER_PLATFORMS
+        )
+    ),
     "default_city": "全国",
-    "keywords": [
-        "Python", "Java", "前端", "产品经理", "数据分析",
-        "算法工程师", "测试", "运维", "UI设计", "运营",
-    ],
+    "keywords": list(
+        dict.fromkeys(
+            [
+                "Python", "Java", "前端", "产品经理", "数据分析",
+                "算法工程师", "测试", "运维", "UI设计", "运营",
+            ]
+            + _EXTRA_CRAWLER_KEYWORDS
+            + _ENV_EXTRA_CRAWLER_KEYWORDS
+        )
+    ),
     "request_interval": float(os.getenv("CRAWLER_REQUEST_INTERVAL", "3")),
     "max_pages": int(os.getenv("CRAWLER_MAX_PAGES", "3")),
     "timeout": int(os.getenv("CRAWLER_TIMEOUT", "30")),
@@ -213,29 +238,6 @@ WEB_CONFIG = {
 # ──────────────────────────────────────────────
 # 汇总导出
 # ──────────────────────────────────────────────
-_DEFAULT_EXTRA_CRAWLER_KEYWORDS = ["Go", "C++", "人工智能", "数据开发", "网络安全"]
-_ENV_EXTRA_CRAWLER_KEYWORDS = [
-    keyword.strip()
-    for keyword in os.getenv("CRAWLER_EXTRA_KEYWORDS", "").split(",")
-    if keyword.strip()
-]
-_ENV_EXTRA_CRAWLER_PLATFORMS = [
-    platform.strip()
-    for platform in os.getenv("CRAWLER_EXTRA_PLATFORMS", "").split(",")
-    if platform.strip()
-]
-CRAWLER_CONFIG["keywords"] = list(
-    dict.fromkeys(
-        CRAWLER_CONFIG["keywords"]
-        + _DEFAULT_EXTRA_CRAWLER_KEYWORDS
-        + _ENV_EXTRA_CRAWLER_KEYWORDS
-    )
-)
-CRAWLER_CONFIG["platforms"] = list(
-    dict.fromkeys(CRAWLER_CONFIG["platforms"] + _ENV_EXTRA_CRAWLER_PLATFORMS)
-)
-
-
 CONFIG = {
     "llm": LLM_CONFIG,
     "embedding": EMBEDDING_CONFIG,

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest import mock
 
+# 必须在使用 llm_client 之前开启 MOCK 模式；这里用 patch.dict 包住测试类，
+# 保证即使同一进程先 import 过 llm_client，mock 开关依然生效
 os.environ["MOCK_LLM"] = "1"
 
 from graph import (  # noqa: E402
@@ -17,6 +20,14 @@ from graph import (  # noqa: E402
 
 
 class CorePipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 显式开启 MOCK，避免依赖模块导入顺序（llm_client.mock_enabled 每次调用实时读 env）
+        self._mock_env = mock.patch.dict(os.environ, {"MOCK_LLM": "1"})
+        self._mock_env.start()
+
+    def tearDown(self) -> None:
+        self._mock_env.stop()
+
     def test_mock_nodes_complete_without_retries(self) -> None:
         state = {
             "resume_text": "Candidate with Python, Django, MySQL, and Redis experience.",

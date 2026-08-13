@@ -17,16 +17,22 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from config import LLM_CONFIG, PATH_CONFIG
+
+# 说明：轻量的标准库与 fastapi 导入统一放模块级；重型依赖
+# （langgraph / chromadb / sentence-transformers / graph / agent /
+# interview_knowledge_base / jd_knowledge_base / resume_reader 等）保持
+# 函数内懒加载，避免健康检查等轻量路径在启动时加载整条依赖链。
 
 logger = logging.getLogger(__name__)
 
@@ -275,8 +281,6 @@ def download_file(filename: str) -> Any:
     Args:
         filename: 文件名（如 定制化简历_某公司_某岗位.docx）
     """
-    from fastapi.responses import FileResponse
-
     if not filename or not filename.strip():
         raise HTTPException(status_code=400, detail="缺少文件名")
 
@@ -326,8 +330,6 @@ async def upload_resume(file: UploadFile = File(...)) -> dict[str, Any]:
             status_code=400,
             detail=f"仅支持 .pdf / .docx / .txt 简历文件，收到: {filename or '未知文件'}",
         )
-
-    import tempfile
 
     tmp_dir = Path(tempfile.gettempdir()) / f"resume_upload_{uuid.uuid4().hex[:8]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -425,11 +427,13 @@ def exp_upload(request: ExpUploadRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"素材保存失败: {e}") from e
 
     # 2. LLM 结构化
+    warnings: list[str] = []
     try:
         questions = process_raw_item(item)
     except Exception as e:  # noqa: BLE001
         logger.warning("/api/exp/upload 结构化失败（素材已保留）: %s", e)
         questions = []
+        warnings.append(f"LLM 结构化失败（素材已保留）: {e}")
 
     # 3. 写入知识库
     added = 0
@@ -438,9 +442,12 @@ def exp_upload(request: ExpUploadRequest) -> dict[str, Any]:
             added = add_experiences(questions)
         except Exception as e:  # noqa: BLE001
             logger.warning("/api/exp/upload 入库失败: %s", e)
+            warnings.append(f"入库失败: {e}")
+    elif not warnings:
+        warnings.append("LLM 未提取到题目（素材已保留，可检查内容格式后重试）")
 
     logger.info("/api/exp/upload：素材已存，结构化 %d 条，入库 %d 条", len(questions), added)
-    return {"saved": added, "questions": questions}
+    return {"saved": added, "questions": questions, "warning": "；".join(warnings) or ""}
 
 
 @app.get("/api/exp/search")

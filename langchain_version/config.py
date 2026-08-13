@@ -87,9 +87,18 @@ EMBEDDING_CONFIG = {
 # ──────────────────────────────────────────────
 # 向量数据库配置（ChromaDB）
 # ──────────────────────────────────────────────
-# RAG 与 langgraph 版共享同一向量库（interview_kb 等集合），避免重复建库
-_SHARED_CHROMA_DIR = BASE_DIR.parent / "langgraph_version" / "data" / "chroma_db"
-if not _SHARED_CHROMA_DIR.exists():
+# RAG 与 langgraph 版共享同一向量库（interview_kb 等集合），避免重复建库。
+# 优先级：
+#   1. CHROMA_DIR 环境变量显式指定（推荐，两版指向同一目录）；
+#   2. 若 langgraph_version/data/chroma_db 存在则复用（旧自动探测逻辑，保留兼容）；
+#   3. 否则使用本目录下的 data/chroma_db。
+# 注意：两版同时运行时必须指向同一目录，否则会出现"看似共享实则分库"。
+_CHROMA_DIR_ENV = os.getenv("CHROMA_DIR", "").strip()
+if _CHROMA_DIR_ENV:
+    _SHARED_CHROMA_DIR = Path(_CHROMA_DIR_ENV)
+elif (BASE_DIR.parent / "langgraph_version" / "data" / "chroma_db").exists():
+    _SHARED_CHROMA_DIR = BASE_DIR.parent / "langgraph_version" / "data" / "chroma_db"
+else:
     _SHARED_CHROMA_DIR = BASE_DIR / "data" / "chroma_db"
 
 CHROMA_CONFIG = {

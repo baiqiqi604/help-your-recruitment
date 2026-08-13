@@ -141,6 +141,35 @@ def get_agent():
     return agent
 
 
+def _extract_reply_text(content: Any) -> str:
+    """从 Agent 返回的 content 中安全提取纯文本。
+
+    langchain 1.x 的 message.content 可能是：
+      - str：普通文本（最常见）
+      - list[dict]：content blocks（如 [{"type": "text", "text": "..."}]）
+    直接 str() 会把 blocks 的原始结构打出来，这里统一提取文本。
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(str(block.get("text", "")))
+                else:
+                    # 非文本块（如 tool_use / image），至少保留可见字段
+                    text = block.get("text") or block.get("content") or ""
+                    if text:
+                        parts.append(str(text))
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(content)
+
+
 def chat_with_agent(user_input: str, session_id: str) -> str:
     """与 Agent 对话，返回回复文本。
 
@@ -170,8 +199,10 @@ def chat_with_agent(user_input: str, session_id: str) -> str:
     if not messages:
         return "（Agent 没有返回内容，请稍后再试）"
 
-    reply = messages[-1].content
-    return str(reply)
+    reply = _extract_reply_text(messages[-1].content)
+    if not reply.strip():
+        return "（Agent 没有返回内容，请稍后再试）"
+    return reply
 
 
 if __name__ == "__main__":

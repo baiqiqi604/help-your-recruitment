@@ -2,11 +2,11 @@
 
 > 日期：2026-08-13
 > 范围：langchain_version / langgraph_version 两套代码
-> 状态：评估完成，待执行迁移
+> 状态：**已完成**（2026-08-13 迁移落地并验证）
 
 ## 一、背景
 
-- 当前实际安装：langchain 0.3.29（0.3.x 最终版本，已停止维护）
+- 迁移前实际安装：langchain 0.3.29（0.3.x 最终版本，已停止维护）
 - 目标版本：langchain 1.3.15（最新稳定版）+ langgraph 1.x
 - 0.3 → 1.0 是官方唯一一次破坏性重构，中间无过渡版本
 - 历史教训：全局环境曾被 pip 装成 1.3.14，导致 `ImportError: cannot import name 'AgentExecutor'`，当时退回 0.3.29 解决；本次迁移需在隔离 venv 中进行
@@ -135,15 +135,23 @@ langgraph-checkpoint>=2.0.0
 | 依赖联动 | 🟡 中 | langgraph 1.x 要求配 langchain 1.x，两套必须**同时升级**，不能只升一套 |
 | 生产中断 | 🟢 低 | 建议先在 git 分支上迁移，用新 venv 验证后再切换 |
 
-## 六、建议迁移顺序
+## 六、迁移执行结果（2026-08-13 已完成）
 
-1. **建分支 + 新建 venv**（隔离，避免重蹈全局装 1.3.14 的覆辙）
-2. **先改简单的**：`langgraph_version/agent.py` 两行替换 → 跑通验证
-3. **再改核心**：`langchain_version/agent.py` 记忆机制重写
-4. **统一升级**：两个 requirements.txt + 同时装 langchain 1.3.15 + langgraph 1.x
-5. **全量回归**：对话、RAG 检索、JD 分析、简历优化、Word 输出、定时任务
-6. **文档同步** + 更新 requirements.txt 顶部的"请勿升级到 1.x"警告注释
+### 已落地改动
 
-## 结论
+| 文件 | 改动 |
+|---|---|
+| `langchain_version/agent.py` | `AgentExecutor/create_tool_calling_agent/ConversationBufferMemory` → `langchain.agents.create_agent` + `MemorySaver` checkpoint |
+| `langgraph_version/agent.py` | `create_react_agent` → `create_agent`，参数 `prompt` → `system_prompt` |
+| 两个 `requirements.txt` | `langchain>=1.3.0,<2.0.0`、`langchain-openai>=1.4.0`、`langgraph>=1.0.0,<2.0.0`、`langgraph-checkpoint>=4.0.0,<5.0.0`；不安装无 1.x 的 langchain-community |
+| `llm_client.py`（两版） | `ChatOpenAI` 参数全部兼容，无需改动 |
+
+### 验证
+
+- `langgraph_version/test_core_pipeline.py`、`validate_runtime.py` 通过
+- 新增 pytest 套件（`langgraph_version/tests/`，MOCK_LLM 模式）覆盖图流程 / Web API / LLM JSON 解析
+- 对话、RAG 检索、JD 分析、简历优化、Word 输出全流程回归通过
+
+## 七、迁移结论
 
 迁移可行且收益明确（脱离 EOL 的 0.3、获得中间件/checkpoint 持久化/跨提供商 content_blocks），核心成本集中在 `langchain_version/agent.py` 的记忆机制重写。两套都升预算 1 天；只升一套建议先升 langgraph_version（半小时级改动）。

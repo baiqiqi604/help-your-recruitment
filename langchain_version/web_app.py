@@ -25,6 +25,7 @@ import importlib.util
 import logging
 import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -370,8 +371,6 @@ async def upload_resume(file: UploadFile = File(...)) -> dict[str, Any]:
     if suffix not in (".pdf", ".docx", ".txt"):
         raise HTTPException(status_code=400, detail=f"仅支持 .pdf/.docx/.txt，收到: {filename or '未知'}")
 
-    import tempfile
-
     tmp_dir = Path(tempfile.gettempdir()) / f"resume_upload_{uuid.uuid4().hex[:8]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     src_path = tmp_dir / f"resume{suffix}"
@@ -414,11 +413,13 @@ def exp_upload(req: ExpUploadRequest) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"素材保存失败: {e}") from e
 
+    warnings: list[str] = []
     questions = []
     try:
         questions = process_raw_item(item)
     except Exception as e:  # noqa: BLE001
         logger.warning("/api/exp/upload 结构化失败（素材已保留）: %s", e)
+        warnings.append(f"LLM 结构化失败（素材已保留）: {e}")
 
     added = 0
     if questions:
@@ -426,8 +427,11 @@ def exp_upload(req: ExpUploadRequest) -> dict[str, Any]:
             added = add_experiences(questions)
         except Exception as e:  # noqa: BLE001
             logger.warning("/api/exp/upload 入库失败: %s", e)
+            warnings.append(f"入库失败: {e}")
+    elif not warnings:
+        warnings.append("LLM 未提取到题目（素材已保留，可检查内容格式后重试）")
 
-    return {"saved": added, "questions": questions}
+    return {"saved": added, "questions": questions, "warning": "；".join(warnings) or ""}
 
 
 @app.get("/api/exp/search")

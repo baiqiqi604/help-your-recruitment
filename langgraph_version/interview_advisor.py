@@ -157,7 +157,7 @@ def generate_interview_questions(
         resume_text=resume or "未提供",
     )
     logger.info("generate_interview_questions：岗位类型=%s，题库命中 %d 条", role_type, len(kb_questions))
-    raw = llm_client.chat_json_array(prompt)
+    raw = llm_client.chat_json_array(prompt, mock_scenario="interview_questions")
     return _normalize_questions(raw)
 
 
@@ -272,7 +272,7 @@ def build_interview_advice(
         resume_text=resume or "（未提供简历）",
     )
     logger.info("build_interview_advice：生成面试建议（公司=%s）", target_company)
-    advice = llm_client.chat(prompt).strip()
+    advice = llm_client.chat(prompt, mock_scenario="interview_advice").strip()
     if not advice:
         raise ValueError("模型返回的面试建议为空")
     return advice

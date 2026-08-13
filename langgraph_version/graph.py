@@ -232,7 +232,7 @@ def review(state: OptimizeState) -> dict[str, Any]:
 
     logger.info("review：调用 LLM 审核优化结果...")
     try:
-        raw = llm_client.chat_json(prompt)
+        raw = llm_client.chat_json(prompt, mock_scenario="resume_review")
     except Exception as e:  # noqa: BLE001
         logger.warning("审核调用失败: %s，默认按不达标处理", e)
         raw = {}

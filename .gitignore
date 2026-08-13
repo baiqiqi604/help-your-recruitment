@@ -7,9 +7,21 @@ __pycache__/
 .venv_v1/
 venv/
 
+# ── 测试 / 工具缓存 ──
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
 # ── 编辑器 ──
 .vscode/
 .idea/
+*.swp
+*~
+*.orig
 
 # ── 运行产物 / 日志 ──
 *.log
@@ -17,6 +29,8 @@ web_out.log
 web_err.log
 web_run.log
 .env
+.env.*
+!.env.example
 
 # ── 数据目录(保留 .gitkeep)──
 **/data/chroma_db/*
@@ -29,7 +43,17 @@ web_run.log
 **/desktop/build/
 **/desktop/dist/
 *.spec.bak
+build/
+dist/
+*.whl
+*.tar.gz
 
 # ── 输出产物目录(保留 .gitkeep)──
 **/output/*
 !**/output/**/.gitkeep
+
+# ── 操作系统 / Jupyter 杂项 ──
+Thumbs.db
+Desktop.ini
+.DS_Store
+.ipynb_checkpoints/

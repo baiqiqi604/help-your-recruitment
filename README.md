@@ -103,7 +103,7 @@ python _ingest_ai_pm_bank.py "AI产品经理1000题面试题库.docx"
 ```
 langgraph_version/
 ├── graph.py                    # LangGraph 7 节点工作流（核心编排）
-├── agent.py                    # RAG 优先答疑 Agent（ReAct + MemorySaver）
+├── agent.py                    # RAG 优先答疑 Agent（create_agent + MemorySaver）
 ├── jd_analyzer.py              # 岗位拆解（分级/岗位类型/隐含目标/风险项）
 ├── content_optimizer.py        # 简历优化 + 四级匹配关系表
 ├── company_researcher.py       # 公司信息分析与求职判断
@@ -117,9 +117,13 @@ langgraph_version/
 ├── llm_client.py               # 多 Provider LLM 客户端
 ├── config.py                   # 全局配置
 ├── web_app.py                  # FastAPI 应用
-├── templates/index.html        # 单页前端（聊天/简历优化/面试题库）
 ├── main.py                     # 入口（web / chat / optimize / doctor）
-├── docs/                       # PRD / 技术文档 / 题库设计文档
+├── validate_runtime.py         # 运行环境自检（main.py doctor）
+├── test_core_pipeline.py       # 核心流水线测试（unittest）
+├── tests/                      # pytest 套件（图流程 / Web API / LLM JSON 解析）
+├── templates/index.html        # 单页前端（聊天/简历优化/面试题库）
+├── desktop/                    # exe 打包目录（PyInstaller）
+├── docs/                       # PRD / 技术开发文档 / 启动指南 / 题库设计
 └── data/ input/ output/        # 运行数据目录
 ```
 

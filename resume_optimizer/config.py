@@ -32,7 +32,8 @@ except ImportError:
 # ──────────────────────────────────────────────
 LLM_CONFIG = {
     "provider": "deepseek",
-    "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-bc783143515b42dab04ea20b1cd0b84a"),
+    # 密钥只从环境变量 / .env 读取，严禁硬编码进源码（曾有真实 Key 误提交，已清除并应轮换）
+    "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
     "base_url": "https://api.deepseek.com",
     "model_name": "deepseek-chat",  # deepseek-chat / deepseek-reasoner
     "temperature": 0.3,             # 简历优化偏稳定，温度调低

@@ -3,11 +3,13 @@
 
 分两阶段验证：
 - Stage A（无需 API Key）：PDF 解析 → 读取简历 → 写回 Word（用模拟优化文本）
-- Stage B（需要 DeepSeek API Key）：岗位分析 → 简历优化 完整 LLM 链路
+- Stage B（LLM 链路）：岗位分析 → 简历优化。设 MOCK_LLM=1 时走模拟响应（无需 API Key），
+  否则需要 DeepSeek API Key
 
 用法：
-    py test_pipeline.py            # 只跑 Stage A
-    py test_pipeline.py --with-llm # 同时跑 Stage B（需配置 API Key）
+    py test_pipeline.py                    # 只跑 Stage A
+    py test_pipeline.py --with-llm         # 同时跑 Stage B（未配 Key 时需 MOCK_LLM=1）
+    set MOCK_LLM=1 && py test_pipeline.py  # 全量走 MOCK 链路（CI 可用）
 """
 
 from __future__ import annotations
@@ -119,9 +121,9 @@ def stage_a_document_pipeline() -> str:
 
 
 def stage_b_llm_pipeline() -> None:
-    """Stage B：验证 LLM 链路（岗位分析 + 简历优化，需 API Key）。"""
+    """Stage B：验证 LLM 链路（岗位分析 + 简历优化，需 API Key 或 MOCK_LLM=1）。"""
     print("\n" + "=" * 60)
-    print("Stage B：LLM 链路（需要 DeepSeek API Key）")
+    print("Stage B：LLM 链路（需要 DeepSeek API Key，或 MOCK_LLM=1 走模拟响应）")
     print("=" * 60)
 
     from jd_analyzer import analyze_jd
@@ -156,14 +158,18 @@ def main() -> None:
     # Stage A 始终运行
     stage_a_document_pipeline()
 
-    # Stage B 仅在指定 --with-llm 时运行
-    if with_llm:
+    # Stage B：--with-llm 显式开启，或 MOCK_LLM=1 时自动开启（走模拟响应，无需 Key）
+    import os
+
+    mock_mode = os.getenv("MOCK_LLM", "").strip().lower() in ("1", "true", "yes")
+    if with_llm or mock_mode:
         try:
             stage_b_llm_pipeline()
         except ValueError as e:
             print(f"\n[SKIP] Stage B 跳过：{e}")
     else:
-        print("\n提示：加 --with-llm 参数可测试 LLM 链路（需配置 DeepSeek API Key）")
+        print("\n提示：加 --with-llm 参数可测试 LLM 链路（需配置 DeepSeek API Key，"
+              "或设 MOCK_LLM=1 走模拟响应）")
 
 
 if __name__ == "__main__":
