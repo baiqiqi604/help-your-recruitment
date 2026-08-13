@@ -4,15 +4,15 @@ uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 
 # ──── LLM 应用框架（LangChain 基础库）────
-# 注意：与 langgraph 0.2.x 配套使用 langchain 0.3.x 栈
-langchain>=0.3.0,<0.4.0
-langchain-community>=0.3.0,<0.4.0
-langchain-openai>=0.2.0,<0.4.0
-langchain-text-splitters>=0.3.0,<0.4.0
+# 已迁移至 langchain 1.x + langgraph 1.x（create_agent 替代 create_react_agent）
+# 注：langchain-community 无 1.x 版本（能力移入 langchain-classic），项目未直接使用故不安装
+langchain>=1.3.0,<2.0.0
+langchain-openai>=1.4.0
+langchain-text-splitters>=1.0.0
 
 # ──── 图编排框架（LangGraph 版）────
-langgraph>=0.2.0,<0.3.0
-langgraph-checkpoint>=2.0.0,<3.0.0
+langgraph>=1.0.0,<2.0.0
+langgraph-checkpoint>=4.0.0,<5.0.0
 
 # ──── 向量数据库 ────
 chromadb>=0.5.0

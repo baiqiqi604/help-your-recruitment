@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 .venv-codex312/
+.venv_v1/
 venv/
 
 # ── 编辑器 ──

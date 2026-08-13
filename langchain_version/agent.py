@@ -1,10 +1,10 @@
 """
-LangChain Tool-calling Agent 模块（RAG 优先答疑模式）
+LangChain Agent 模块（RAG 优先答疑模式）— 已迁移至 langchain 1.x
 
 职责：
 1. 组合 答疑检索 / 岗位分析 / 简历优化 三个工具
-2. 用 create_tool_calling_agent 构建 Tool-calling Agent
-3. 会话级记忆 ConversationBufferMemory（按 session_id 缓存）
+2. 用 langchain.agents.create_agent 构建 Tool-calling Agent（1.x API）
+3. 多轮记忆：LangGraph checkpoint（MemorySaver），按 session_id / thread_id 隔离
 4. 导出 get_agent() 单例 与 chat_with_agent() 对话入口
 
 答疑流程（RAG 优先）：
@@ -13,7 +13,7 @@ LangChain Tool-calling Agent 模块（RAG 优先答疑模式）
     → 未命中：大模型直接回答，注明"题库暂无收录，以下为模型回答"
 简历/JD 相关请求走 analyze_jd / optimize_resume。
 
-依赖：langchain、langchain-openai（经 llm_client）
+依赖：langchain、langchain-openai（经 llm_client）、langgraph（checkpoint 记忆）
 """
 
 from __future__ import annotations
@@ -22,10 +22,9 @@ import logging
 from functools import lru_cache
 from typing import Any
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.memory import ConversationBufferMemory
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_agent
 from langchain.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
 
 import content_optimizer
 import jd_analyzer
@@ -120,31 +119,20 @@ TOOLS = [
 # ──────────────────────────────────────────────
 # Agent 构建（单例）
 # ──────────────────────────────────────────────
-def _build_prompt() -> ChatPromptTemplate:
-    """构造 Tool-calling Agent 提示词模板。
-
-    模板必须包含 chat_history（记忆）与 agent_scratchpad（推理过程）占位符。
-    """
-    return ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ]
-    )
-
-
 @lru_cache(maxsize=1)
 def get_agent():
-    """获取 Tool-calling Agent 单例（无记忆，供各会话复用）。
+    """获取带 MemorySaver 检查点的 Tool-calling Agent（单例，供各会话复用）。
 
     Returns:
-        langchain.agents.Agent 实例
+        langchain.agents.create_agent 构建的 Agent 实例
     """
     llm = llm_client.get_llm()
-    prompt = _build_prompt()
-    agent = create_tool_calling_agent(llm, TOOLS, prompt)
+    agent = create_agent(
+        model=llm,
+        tools=TOOLS,
+        system_prompt=SYSTEM_PROMPT,
+        checkpointer=MemorySaver(),
+    )
     logger.info(
         "RAG 优先答疑 Tool-calling Agent 已创建（provider=%s model=%s）",
         llm_client.LLM_CONFIG["provider"],
@@ -156,35 +144,12 @@ def get_agent():
 # ──────────────────────────────────────────────
 # 会话级记忆与对话入口
 # ──────────────────────────────────────────────
-# 会话缓存：session_id → AgentExecutor（含独立 ConversationBufferMemory）
-_sessions: dict[str, AgentExecutor] = {}
-
-
-def _get_session_executor(session_id: str) -> AgentExecutor:
-    """按 session_id 获取（或创建）会话级 AgentExecutor。"""
-    if session_id not in _sessions:
-        memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-        )
-        _sessions[session_id] = AgentExecutor(
-            agent=get_agent(),
-            tools=TOOLS,
-            memory=memory,
-            verbose=False,
-            max_iterations=6,
-            handle_parsing_errors=True,
-        )
-        logger.info("创建会话记忆: %s", session_id)
-    return _sessions[session_id]
-
-
 def chat_with_agent(user_input: str, session_id: str) -> str:
-    """与 Agent 对话（带会话级记忆）。
+    """与 Agent 对话（多轮记忆由 checkpoint 按 thread_id 隔离）。
 
     Args:
         user_input: 用户输入
-        session_id: 会话标识，同一会话共享记忆（dict 缓存）
+        session_id: 会话标识，同一会话通过 thread_id 共享上下文
 
     Returns:
         Agent 回复文本
@@ -199,10 +164,15 @@ def chat_with_agent(user_input: str, session_id: str) -> str:
 
     session_id = session_id or "default"
     try:
-        executor = _get_session_executor(session_id)
-        result = executor.invoke({"input": user_input.strip()})
-        output = result.get("output")
-        return str(output) if output else "（Agent 未返回有效内容）"
+        agent = get_agent()
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": user_input.strip()}]},
+            config={"configurable": {"thread_id": session_id}},
+        )
+        messages = result.get("messages") or []
+        if not messages:
+            return "（Agent 未返回有效内容）"
+        return str(messages[-1].content)
     except Exception as e:  # noqa: BLE001
         logger.exception("Agent 调用失败（session=%s）: %s", session_id, e)
         return f"抱歉，处理时出错了：{e}"

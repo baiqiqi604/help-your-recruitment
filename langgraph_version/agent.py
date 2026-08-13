@@ -119,11 +119,11 @@ def get_agent():
     实现多轮对话记忆。
     """
     try:
+        from langchain.agents import create_agent
         from langgraph.checkpoint.memory import MemorySaver
-        from langgraph.prebuilt import create_react_agent
     except ImportError as e:
         raise ImportError(
-            "缺少依赖 langgraph，请执行: pip install langgraph langgraph-checkpoint"
+            "缺少依赖 langchain/langgraph，请执行: pip install langchain langgraph langgraph-checkpoint"
         ) from e
 
     from llm_client import get_llm
@@ -131,10 +131,10 @@ def get_agent():
     model = get_llm()
     checkpointer = MemorySaver()
 
-    agent = create_react_agent(
+    agent = create_agent(
         model=model,
         tools=TOOLS,
-        prompt=SYSTEM_PROMPT,
+        system_prompt=SYSTEM_PROMPT,
         checkpointer=checkpointer,
     )
     logger.info("get_agent：RAG 优先答疑 Agent 构建完成（MemorySaver 记忆）")
