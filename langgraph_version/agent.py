@@ -1,7 +1,8 @@
 """
 LangGraph 对话 Agent（RAG 优先答疑模式）
 
-基于 langgraph.prebuilt.create_react_agent 构建一个「答疑助手」：
+基于 langchain.agents.create_agent（langchain 1.x，替代旧版
+langgraph.prebuilt.create_react_agent）构建一个「答疑助手」：
 用户提问 → 优先检索面试/笔试经验知识库（interview_kb，RAG）
     → 命中：整理参考答案回答 + 推荐 5 道相关题目
     → 未命中：直接由大模型回答，并注明"题库暂无收录，以下为模型回答"

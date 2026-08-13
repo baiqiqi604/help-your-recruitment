@@ -30,4 +30,12 @@ jobs:
       - name: 运行测试（MOCK_LLM 模式，无需 API Key）
         env:
           MOCK_LLM: "1"
-        run: pytest --cov=tests --cov-report=term-missing
+        # 注意：--cov 必须指向被测源码而非 tests 包自身，否则覆盖率恒为 ~100% 无意义
+        run: >-
+          pytest
+          --cov=config --cov=llm_client --cov=graph --cov=agent
+          --cov=jd_analyzer --cov=content_optimizer --cov=company_researcher
+          --cov=interview_advisor --cov=resume_reader --cov=resume_writer
+          --cov=interview_knowledge_base --cov=jd_knowledge_base
+          --cov=web_app --cov=validate_runtime --cov=main --cov=experience_processor
+          --cov-report=term-missing --cov-fail-under=60

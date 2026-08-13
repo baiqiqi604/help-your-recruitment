@@ -138,3 +138,5 @@ reply2 = chat_with_agent("它需要哪些技能？", session_id="s1")  # 记得�
 
 - [产品需求文档 PRD](docs/PRD.md)
 - [技术开发文档（含 StateGraph 设计图 / 记忆机制）](docs/技术开发文档.md)
+- [启动指南（含离线模式 / exe 部署）](docs/启动指南.md)
+- [面试笔试经验知识库设计](docs/面试笔试经验知识库设计.md)

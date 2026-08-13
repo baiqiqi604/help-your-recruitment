@@ -8,7 +8,10 @@ import config
 from graph import (
     END,
     MAX_ATTEMPTS,
+    analyze_jd,
     load_resume,
+    optimize,
+    review,
     route_after_review,
     route_after_stage,
     run_optimize,
@@ -94,3 +97,26 @@ class TestRunOptimize:
         result = run_optimize("", SAMPLE_JD, target_company="某科技有限公司")
         assert result["error"]
         assert not result["optimized_text"]
+
+    def test_mock_nodes_complete_without_retries(self, isolated_output_dir) -> None:
+        """节点级顺序执行：load → analyze → optimize → review 均成功且不触发重试。"""
+        state = {
+            "resume_text": SAMPLE_RESUME,
+            "jd_text": SAMPLE_JD,
+            "target_company": "某科技有限公司",
+            "attempts": 0,
+        }
+        state.update(load_resume(state))
+        assert route_after_stage(state) == "continue"
+
+        state.update(analyze_jd(state))
+        assert route_after_stage(state) == "continue"
+        assert "Python" in state["jd_analysis"]["required_skills"]
+
+        state.update(optimize(state))
+        assert route_after_stage(state) == "continue"
+        assert state["optimized_text"]
+
+        state.update(review(state))
+        assert state["review_verdict"]["pass"] is True
+        assert state.get("attempts", 0) == 0

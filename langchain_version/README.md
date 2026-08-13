@@ -1,5 +1,8 @@
 # 简历优化 Agent（LangChain 版）
 
+> 🔒 **已冻结（FROZEN）**：本版本不再维护，仅作参考。代码修复、安全更新与测试
+> 只落在 `langgraph_version`（主力版）；本目录与主力版存在重复代码且不再同步。
+
 一个基于 **LangChain Tool-calling Agent** 的智能求职助手：聚合多平台岗位数据、语义检索岗位、分析 JD、一键优化简历，并生成「简历-JD 匹配关系表」。
 
 > 对应项目目录：`langchain_version/`，多 Provider（DeepSeek / OpenAI / 通义千问 / 智谱）统一走 OpenAI 兼容接口。

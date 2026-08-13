@@ -1,10 +1,13 @@
 """独立启动 uvicorn Web 服务（脱离 bash 会话，避免被连带终止）。
 
-用法: python start_web.py <版本目录> <端口> [host]
+用法: python start_web.py <版本目录> <端口> [host] [--mock]
 
 示例:
     python start_web.py D:/项目/aiagent/langgraph_version 8000
-    python start_web.py D:/项目/aiagent/langchain_version 8001 127.0.0.1
+    python start_web.py D:/项目/aiagent/langchain_version 8001 127.0.0.1 --mock
+
+--mock 启用 MOCK_LLM=1（模拟 LLM 响应，适合无 API Key 演示）；
+不加该参数则按 .env / 环境变量走真实 LLM。
 """
 import argparse
 import os
@@ -27,6 +30,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("port", type=int, help="服务端口（1-65535）")
     parser.add_argument("host", type=str, nargs="?", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
+    parser.add_argument(
+        "--mock", action="store_true", help="启用 MOCK_LLM=1（模拟 LLM 响应，无需 API Key）"
+    )
     return parser.parse_args()
 
 
@@ -45,7 +51,9 @@ def main() -> int:
         return 2
 
     env = dict(os.environ)
-    env.setdefault("MOCK_LLM", "1")
+    if args.mock:
+        env["MOCK_LLM"] = "1"
+        print("ℹ️ MOCK_LLM=1：使用模拟 LLM 响应（演示模式，无真实 API 调用）")
 
     out_log = os.path.join(version_dir, "web_out.log")
     err_log = os.path.join(version_dir, "web_err.log")

@@ -2,7 +2,7 @@
 
 > 一个基于大模型的**求职助手**：针对目标公司与岗位 JD，生成定制化简历与面试建议，并提供**面试/笔试题库答疑**（RAG）与对话式求职咨询。
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-0.2-orange) ![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green) ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5-purple)
+![Python](https://img.shields.io/badge/Python-3.10+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-1.x-orange) ![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green) ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5-purple)
 
 ---
 
@@ -24,8 +24,12 @@
 |------|------|------|
 | `master` | 完整归档（根文档 + 三个版本目录） | 归档 |
 | `langgraph` | **LangGraph 版（主力）**：图编排 + 面试题库 + 答疑 | ✅ 推荐 |
-| `langchain` | LangChain 版：Tool-calling Agent + 线性流水线 | 可选 |
-| `resume-optimizer` | 历史初版（LangChain 0.3 线性流水线） | 参考保留 |
+| `langchain` | LangChain 版：Tool-calling Agent + 线性流水线 | 🔒 已冻结（仅参考，不再维护） |
+| `resume-optimizer` | 历史初版（LangChain 0.3 线性流水线） | 🔒 已冻结（仅参考，不再维护） |
+
+> 🔒 **版本维护约定**：代码修复、安全更新与测试只落在 `langgraph_version`（主力版）。
+> `langchain_version` 与 `resume_optimizer` 已冻结，仅作参考；两者与主力版存在重复代码，
+> 不再同步维护（如需恢复请从 git 分支检出）。
 
 > 本 README 以 `langgraph` 分支为准。
 

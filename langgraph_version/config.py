@@ -82,10 +82,12 @@ LLM_CONFIG = {
 }
 
 # ──────────────────────────────────────────────
-# Embedding 模型配置（BGE-large-zh-v1.5）
+# Embedding 模型配置（BGE-small-zh-v1.5）
+# 说明：small（约 95MB）为实际部署口径（.env 与 exe 打包一致）；
+# 若需 large（1.3GB，下载易超时）可显式设置 EMBEDDING_MODEL 覆盖。
 # ──────────────────────────────────────────────
 EMBEDDING_CONFIG = {
-    "model_name": os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5"),
+    "model_name": os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5"),
     "device": os.getenv("EMBEDDING_DEVICE", "cpu"),  # 有 GPU 可改为 cuda
 }
 

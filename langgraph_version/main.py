@@ -131,8 +131,12 @@ def cmd_chat(args: argparse.Namespace) -> None:
         print(f"Agent: {reply}")
 
 
-def cmd_optimize(args: argparse.Namespace) -> None:
-    """命令行一次性简历定制优化（依据《定制化简历大师》Skill）。"""
+def cmd_optimize(args: argparse.Namespace) -> int:
+    """命令行一次性简历定制优化（依据《定制化简历大师》Skill）。
+
+    Returns:
+        0 成功；1 参数或执行失败
+    """
     from graph import run_optimize
 
     print("读取简历中...")
@@ -146,14 +150,14 @@ def cmd_optimize(args: argparse.Namespace) -> None:
     target_company = (args.company or "").strip()
     if not target_company:
         print("❌ 请提供 --company 目标公司名称")
-        sys.exit(1)
+        return 1
 
     print("执行 LangGraph 定制流水线（拆解岗位 → 公司分析 → 优化 → 审核 → 面试建议）...")
     result = run_optimize(resume_text, jd_text, target_company=target_company)
 
     if result.get("error"):
         print(f"❌ 定制失败: {result['error']}")
-        sys.exit(1)
+        return 1
 
     optimized = result.get("optimized_text", "")
     matching_table = result.get("matching_table", [])
@@ -194,16 +198,20 @@ def cmd_optimize(args: argparse.Namespace) -> None:
     out_path = out_dir / f"optimized_{ts}.txt"
     out_path.write_text(optimized, encoding="utf-8")
     print(f"\n已保存: {out_path}")
+    return 0
 
 
-def cmd_doctor(_args: argparse.Namespace) -> None:
-    """Check dependencies, LLM configuration, and persisted crawl data."""
+def cmd_doctor(_args: argparse.Namespace) -> int:
+    """Check dependencies, LLM configuration, and persisted crawl data.
+
+    Returns:
+        0 就绪；1 存在缺失依赖 / 坏 JSON / 未配置 API Key
+    """
     from validate_runtime import collect_diagnostics
 
     report = collect_diagnostics()
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    if not report["ready"]:
-        raise SystemExit(1)
+    return 0 if report["ready"] else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -248,13 +256,16 @@ def main() -> None:
         "doctor": cmd_doctor,
     }
     try:
-        handlers[args.command](args)
+        code = handlers[args.command](args)
     except KeyboardInterrupt:
         print("\n已退出。")
+        return
     except Exception as e:  # noqa: BLE001
         logger.exception("命令执行失败")
         print(f"❌ {e}")
         sys.exit(1)
+    if code:
+        sys.exit(code)
 
 
 if __name__ == "__main__":
