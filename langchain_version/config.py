@@ -105,6 +105,30 @@ CHROMA_CONFIG = {
     "persist_directory": str(_SHARED_CHROMA_DIR),
     "collection_fulltext": "jd_fulltext",   # 岗位全文 JD
     "collection_premium": "jd_premium",     # 大厂 + 高频岗位
+    "collection_title": "jd_title",         # 岗位标题/技能短文本（检索单元，命中后映射回全文）
+}
+
+# ──────────────────────────────────────────────
+# Rerank 重排配置（bge-reranker-v2-m3，跨编码器精排）
+# 说明：
+# - 懒加载：首次检索时才加载模型；加载失败（缺依赖/无网络/被墙）自动降级为
+#   不重排，按向量距离原序返回，不影响功能。
+# - 模型约 2GB，首次使用会从 HuggingFace 下载；国内网络可设 HF_ENDPOINT 镜像。
+# ──────────────────────────────────────────────
+# Rerank 模型默认路径：若本地已下载（models/bge-reranker-v2-m3，两版共享）则优先使用，
+# 否则回退 HuggingFace 模型 ID（首次使用会联网下载；可设 HF_ENDPOINT 镜像）。
+_LOCAL_RERANK_MODEL = BASE_DIR.parent / "models" / "bge-reranker-v2-m3"
+_DEFAULT_RERANK_MODEL = (
+    str(_LOCAL_RERANK_MODEL) if _LOCAL_RERANK_MODEL.exists() else "BAAI/bge-reranker-v2-m3"
+)
+RERANK_CONFIG = {
+    "enabled": os.getenv("RERANK_ENABLED", "1") != "0",
+    "model_name": os.getenv("RERANK_MODEL", _DEFAULT_RERANK_MODEL),
+    "device": os.getenv("RERANK_DEVICE", EMBEDDING_CONFIG["device"]),
+    # 粗召回倍数：先按 top_k * multiplier 召回候选，再重排取 top_k
+    "candidate_multiplier": int(os.getenv("RERANK_CANDIDATE_MULTIPLIER", "5")),
+    # 送入重排的候选上限（防超长列表拖慢打分）
+    "max_candidates": int(os.getenv("RERANK_MAX_CANDIDATES", "50")),
 }
 
 # ──────────────────────────────────────────────
@@ -176,6 +200,7 @@ CONFIG = {
     "llm": LLM_CONFIG,
     "embedding": EMBEDDING_CONFIG,
     "chroma": CHROMA_CONFIG,
+    "rerank": RERANK_CONFIG,
     "path": PATH_CONFIG,
     "crawler": CRAWLER_CONFIG,
     "scheduler": SCHEDULER_CONFIG,
