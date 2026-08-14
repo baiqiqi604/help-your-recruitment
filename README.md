@@ -1,6 +1,6 @@
 # 📄 AI 简历优化 Agent — 定制化简历大师
 
-> 一个基于大模型的**求职助手**：针对目标公司与岗位 JD，生成定制化简历与面试建议，并提供**面试/笔试题库答疑**（RAG）与对话式求职咨询。
+> 一个基于大模型的**求职助手**：针对目标公司与岗位 JD，生成定制化简历与面试建议，并提供**面试/笔试题库答疑（RAG）**与对话式求职咨询。
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-1.x-orange) ![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green) ![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5-purple)
 
@@ -13,25 +13,23 @@
 | 📝 **定制化简历** | 围绕目标公司 + 岗位 JD，按「定制简历原则」生成 ATS 友好简历（不虚构经历），输出 Word 文档 |
 | 🏢 **公司分析** | 分析目标公司公开信息（正负面/网络评价/招聘观察），给出求职判断与投递策略 |
 | 🎯 **面试建议** | 结合公司情况 + JD + 用户履历，生成针对性面试问题与 STAR 案例建议（Word 文档） |
-| 📚 **面试题库（RAG）** | ChromaDB 面试/笔试经验知识库，支持语义检索、按公司/岗位/轮次筛选、相关题目推荐 |
-| 💬 **答疑助手** | 聊天先检索题库 → 命中整理答案 + 推荐 5 道相关题；未命中由大模型回答 |
+| 📚 **面试题库（RAG）** | ChromaDB 面试/笔试经验知识库，**标题索引 + 关键词兜底 + Rerank 精排**，支持按公司/岗位/轮次筛选、相关题目推荐 |
+| 💬 **答疑助手** | 聊天先检索题库 → 命中整理答案 + 推荐相关题；未命中由大模型回答 |
+| 🔍 **岗位检索（RAG）** | 岗位知识库语义检索（标题/技能短索引 → 映射全文 → Rerank），支持大厂过滤 |
 | 🧠 **多 Provider** | DeepSeek / OpenAI / 通义千问 / 智谱 GLM，OpenAI 兼容接口一键切换 |
 | 🧬 **LangGraph 工作流** | 图状态编排：拆解岗位 → 公司分析 → 优化 → LLM 审核（自动重试）→ 面试建议 → 双文档输出 |
 
-## 🌿 分支结构
+## 🌿 版本结构
 
-| 分支 | 内容 | 状态 |
+| 目录 | 内容 | 状态 |
 |------|------|------|
-| `master` | 完整归档（根文档 + 三个版本目录） | 归档 |
-| `langgraph` | **LangGraph 版（主力）**：图编排 + 面试题库 + 答疑 | ✅ 推荐 |
-| `langchain` | LangChain 版：Tool-calling Agent + 线性流水线 | 🔒 已冻结（仅参考，不再维护） |
-| `resume-optimizer` | 历史初版（LangChain 0.3 线性流水线） | 🔒 已冻结（仅参考，不再维护） |
+| `langgraph_version/` | **LangGraph 版（主力）**：图编排 + 面试题库 + 答疑 + RAG 检索增强 | ✅ 推荐 |
+| `langchain_version/` | LangChain 版：Tool-calling Agent + 线性流水线 | 🔒 冻结（RAG 检索层已同步至与主力版一致，2026-08-14） |
+| `resume_optimizer/` | 历史初版（LangChain 0.3 线性流水线） | 🔒 冻结（仅参考） |
 
 > 🔒 **版本维护约定**：代码修复、安全更新与测试只落在 `langgraph_version`（主力版）。
-> `langchain_version` 与 `resume_optimizer` 已冻结，仅作参考；两者与主力版存在重复代码，
-> 不再同步维护（如需恢复请从 git 分支检出）。
-
-> 本 README 以 `langgraph` 分支为准。
+> `langchain_version` 其余功能不再同步维护；但两版的 **RAG 检索层（`jd_knowledge_base.py` /
+> `interview_knowledge_base.py` / `reranker.py` / `config.py`）已保持同步**，且共享同一 ChromaDB 目录。
 
 ## 🚀 快速开始
 
@@ -85,6 +83,43 @@ python _ingest_experiences.py 面经1.docx 面经2.md
 python _ingest_ai_pm_bank.py "AI产品经理1000题面试题库.docx"
 ```
 
+### Rerank 模型（可选，推荐启用）
+
+检索结果会经过 **bge-reranker-v2-m3 跨编码器精排**（约 2.2GB），默认策略：
+
+1. 若 `models/bge-reranker-v2-m3/`（项目根目录，两版共享）存在 → **自动使用本地模型**，无需联网；
+2. 否则回退 HuggingFace 模型 ID（首次检索时自动下载；`huggingface.co` 被墙时可设 `HF_ENDPOINT=https://hf-mirror.com`）；
+3. 模型加载失败 / 未启用 → **自动降级为不重排**（按向量距离原序返回），不影响检索功能。
+
+> 本地模型下载参考（huggingface.co 不可达时从镜像拉取）：
+> ```bash
+> mkdir -p models/bge-reranker-v2-m3
+> cd models/bge-reranker-v2-m3
+> for f in config.json sentencepiece.bpe.model special_tokens_map.json tokenizer.json tokenizer_config.json; do
+>   curl -L -o "$f" "https://hf-mirror.com/BAAI/bge-reranker-v2-m3/resolve/main/$f"
+> done
+> curl -L -o model.safetensors "https://hf-mirror.com/BAAI/bge-reranker-v2-m3/resolve/main/model.safetensors"
+> ```
+
+## 📚 RAG 检索策略（增强）
+
+面试题库与岗位库共用同一套「**标题索引 + 关键词兜底 + Rerank 精排**」流水线：
+
+```
+检索请求
+  → ① 查「标题索引集合」（短文本：题目+考察点 / 岗位名+公司+技能）
+       短文档对短查询的向量距离更低，显著提升召回（如 "LRU" 这类简写不再只靠兜底）
+  → ② 标题索引为空（旧库未重建）→ 自动回退全文集合检索（兼容旧数据）
+  → ③ 相似度阈值过滤（面试题：cosine 距离 ≤ 0.6，可配）
+  → ④ 关键词兜底：向量命中不足时按词元 $contains 子串匹配补召回（按 id 去重合并）
+  → ⑤ 按 id 映射回全文集合，取回完整内容（参考思路 / 完整 JD）
+  → ⑥ Rerank 精排：粗召回 top_k × 5 条（上限 50），(query, 全文) 逐对打分，取 top_k
+```
+
+- **存储**：每道题/每个岗位双文档入库——全文集合（`interview_kb` / `jd_fulltext`、`jd_premium`）+ 标题索引集合（`interview_kb_title` / `jd_title`，id 带 `#t` 后缀）；
+- **降级**：缺 chromadb / embedding / rerank 依赖时不抛异常，按可用能力逐级降级；
+- **数据迁移**：旧库无标题索引时检索自动回退全文；重建知识库（`build_jd_knowledge_base()` + 重新 `add_experiences`）后标题索引生效。
+
 ## 🔌 API 接口
 
 | 方法 | 路径 | 说明 |
@@ -99,7 +134,7 @@ python _ingest_ai_pm_bank.py "AI产品经理1000题面试题库.docx"
 | GET | `/api/exp/algorithm` | 笔试算法题 |
 | POST | `/api/exp/upload` | 手动面经入库 |
 | GET | `/api/exp/count` | 题库题目总数 |
-| GET | `/api/jobs/search` | 岗位检索（已降级，数据有限） |
+| GET | `/api/jobs/search` | 岗位检索（标题索引 + Rerank） |
 | GET | `/api/health` | 健康检查 |
 
 ## 🗂️ 项目结构（langgraph_version）
@@ -116,19 +151,22 @@ langgraph_version/
 ├── resume_writer.py            # 定制化简历/面试建议 Word 文档输出
 ├── experience_crawler.py       # 面经抓取（CSDN/掘金浏览器渲染）
 ├── experience_processor.py     # 面经 LLM 结构化加工
-├── interview_knowledge_base.py # 面试题库检索层（ChromaDB interview_kb）
-├── jd_knowledge_base.py        # 岗位库（已降级，可选）
+├── interview_knowledge_base.py # 面试题库检索层（interview_kb + interview_kb_title 双集合）
+├── jd_knowledge_base.py        # 岗位库（jd_fulltext / jd_premium / jd_title）
+├── reranker.py                 # ★ Rerank 精排（bge-reranker-v2-m3，懒加载 + 优雅降级）
 ├── llm_client.py               # 多 Provider LLM 客户端
-├── config.py                   # 全局配置
+├── config.py                   # 全局配置（LLM / Embedding / Rerank / 向量库 / 路径）
 ├── web_app.py                  # FastAPI 应用
 ├── main.py                     # 入口（web / chat / optimize / doctor）
 ├── validate_runtime.py         # 运行环境自检（main.py doctor）
 ├── test_core_pipeline.py       # 核心流水线测试（unittest）
-├── tests/                      # pytest 套件（图流程 / Web API / LLM JSON 解析）
+├── tests/                      # pytest 套件（图流程 / Web API / 检索 / LLM JSON 解析）
 ├── templates/index.html        # 单页前端（聊天/简历优化/面试题库）
 ├── desktop/                    # exe 打包目录（PyInstaller）
 ├── docs/                       # PRD / 技术开发文档 / 启动指南 / 题库设计
 └── data/ input/ output/        # 运行数据目录
+
+models/bge-reranker-v2-m3/      # 项目根目录：Rerank 模型（两版共享，config 自动探测）
 ```
 
 ## ⚙️ 配置说明（.env）
@@ -141,6 +179,13 @@ DEEPSEEK_API_KEY=sk-xxx
 # Embedding 模型（BGE 中文，本地运行）
 EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 
+# Rerank 精排（不配置则自动探测：models/bge-reranker-v2-m3 存在即用本地，否则回退 HF id）
+# RERANK_ENABLED=1               # 0 关闭重排（测试环境默认 0）
+# RERANK_MODEL=D:/项目/aiagent/models/bge-reranker-v2-m3   # 显式覆盖模型路径
+# RERANK_DEVICE=cpu              # 有 GPU 可改 cuda
+# RERANK_CANDIDATE_MULTIPLIER=5  # 粗召回倍数
+# RERANK_MAX_CANDIDATES=50       # 送入重排的候选上限
+
 # Web 服务
 WEB_HOST=127.0.0.1
 WEB_PORT=8000
@@ -150,7 +195,7 @@ WEB_PORT=8000
 
 - **编排**：LangGraph（StateGraph + ReAct Agent + MemorySaver）
 - **Web**：FastAPI + 原生单页前端（HTML/CSS/JS）
-- **RAG**：ChromaDB + BGE 中文 Embedding（sentence-transformers）
+- **RAG**：ChromaDB + BGE 中文 Embedding（sentence-transformers）+ **bge-reranker-v2-m3 精排**
 - **文档**：python-docx / pdf2docx
 - **抓取**：DrissionPage（浏览器渲染）+ BeautifulSoup
 
@@ -159,6 +204,7 @@ WEB_PORT=8000
 - [PRD（产品需求）](langgraph_version/docs/PRD.md)
 - [技术开发文档](langgraph_version/docs/技术开发文档.md)
 - [面试笔试经验知识库设计](langgraph_version/docs/面试笔试经验知识库设计.md)
+- [启动指南（离线模式 / exe 部署）](langgraph_version/docs/启动指南.md)
 
 ## ⚠️ 声明
 

@@ -14,15 +14,15 @@
 | 对话 Agent | `langchain.agents.create_agent` + `MemorySaver`，按 session（thread_id）多轮记忆 |
 | 简历读取 | PDF → Word（pdf2docx）+ python-docx 提取段落/表格/全文 |
 | 格式输出 | 优化结果写回 Word 保留格式，可选导出 PDF（docx2pdf） |
-| 岗位知识库 | ChromaDB + BGE 中文 Embedding（`BGEEmbeddingFunction`），语义检索/优质岗位 |
-| 面试题库（RAG） | ChromaDB `interview_kb` 集合：语义检索 + 关键词兜底 + 阈值过滤 |
+| 岗位知识库 | ChromaDB + BGE 中文 Embedding（`BGEEmbeddingFunction`），标题/技能短索引 + 语义检索/优质岗位 |
+| 面试题库（RAG） | ChromaDB `interview_kb` + `interview_kb_title` 双集合：标题索引 → 阈值过滤 → 关键词兜底 → **Rerank 精排** |
 | 面经导入 | `_ingest_experiences.py` / `_ingest_ai_pm_bank.py` 等一次性导入脚本 |
 
 ## 项目结构
 
 ```
 langgraph_version/
-├── config.py                 # 全局配置（LLM / 向量库 / 路径 / 爬虫）
+├── config.py                 # 全局配置（LLM / Embedding / Rerank / 向量库 / 路径 / 爬虫）
 ├── llm_client.py             # 多 Provider LLM 客户端（DeepSeek/OpenAI/通义/智谱）
 ├── graph.py                  # ★ LangGraph StateGraph 优化流水线
 ├── agent.py                  # ★ LangGraph 对话 Agent（MemorySaver 记忆）
@@ -32,8 +32,9 @@ langgraph_version/
 ├── interview_advisor.py      # 面试问题生成 + 面试建议
 ├── resume_reader.py          # PDF→Word→文本
 ├── resume_writer.py          # 写回 Word + 导出 PDF
-├── interview_knowledge_base.py # 面试题库检索层（ChromaDB interview_kb）
-├── jd_knowledge_base.py      # 岗位库（已降级，可选）
+├── interview_knowledge_base.py # 面试题库检索层（interview_kb + interview_kb_title 双集合）
+├── jd_knowledge_base.py      # 岗位库（jd_fulltext / jd_premium / jd_title，已降级，可选）
+├── reranker.py               # ★ Rerank 精排（bge-reranker-v2-m3，懒加载 + 优雅降级）
 ├── experience_crawler.py     # 面经抓取 / 手动素材保存
 ├── experience_processor.py   # 面经 LLM 结构化加工
 ├── web_app.py                # FastAPI 服务
@@ -65,6 +66,9 @@ pip install -r requirements.txt
 cp .env.example .env
 # LLM_PROVIDER=deepseek
 # DEEPSEEK_API_KEY=sk-xxx
+# Rerank：默认自动探测本地 models/bge-reranker-v2-m3（不存在时回退 HuggingFace id）
+# RERANK_ENABLED=1
+# RERANK_MODEL=D:/项目/aiagent/models/bge-reranker-v2-m3
 ```
 
 ### 3. 启动 Web 服务

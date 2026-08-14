@@ -1,7 +1,9 @@
 # 简历优化 Agent（LangChain 版）
 
 > 🔒 **已冻结（FROZEN）**：本版本不再维护，仅作参考。代码修复、安全更新与测试
-> 只落在 `langgraph_version`（主力版）；本目录与主力版存在重复代码且不再同步。
+> 只落在 `langgraph_version`（主力版）；**例外：RAG 检索层（`jd_knowledge_base.py` /
+> `interview_knowledge_base.py` / `reranker.py` / `config.py`）已与主力版同步（2026-08-14）**，
+> 两版共享同一 ChromaDB 目录（标题索引 / Rerank 集合共用）。
 
 一个基于 **LangChain Tool-calling Agent** 的智能求职助手：聚合多平台岗位数据、语义检索岗位、分析 JD、一键优化简历，并生成「简历-JD 匹配关系表」。
 
@@ -13,7 +15,8 @@
 
 - 🤖 **Tool-calling Agent**：LangChain Agent 自动规划调用「岗位检索 / 优质岗位 / JD 分析 / 简历优化」四个工具
 - 🧠 **多 Provider LLM**：`LLM_PROVIDER` 一键切换 deepseek / openai / dashscope / zhipu
-- 🔎 **语义检索**：ChromaDB + BGE（`bge-large-zh-v1.5`）中文向量检索岗位
+- 🔎 **语义检索**：ChromaDB + BGE（`bge-large-zh-v1.5`）中文向量检索岗位；岗位/面试题库
+  采用「标题索引 + 关键词兜底 + Rerank 精排」（`bge-reranker-v2-m3`，与主力版一致）
 - 📄 **多格式简历**：支持 `.pdf` / `.docx` / `.txt` 读取，优化结果输出结构化 `.docx`（可选 `.pdf`）
 - 🕷️ **多平台爬虫骨架**：boss / lagou / liepin / zhilian，失败降级不崩溃
 - ⏰ **定时采集**：APScheduler 每天自动爬取岗位并写入知识库
@@ -30,7 +33,8 @@ langchain_version/
 ├── content_optimizer.py    # 简历内容优化 + 匹配关系表
 ├── resume_reader.py        # 简历读取（pdf_to_docx / read_resume）
 ├── resume_writer.py        # 优化结果写 docx / docx_to_pdf
-├── jd_knowledge_base.py    # 岗位知识库（ChromaDB + BGE Embedding）
+├── jd_knowledge_base.py    # 岗位知识库（ChromaDB + BGE Embedding，jd_title 标题索引）
+├── reranker.py             # Rerank 精排（bge-reranker-v2-m3，懒加载 + 优雅降级）
 ├── jd_crawler.py           # 多平台岗位爬虫（httpx + bs4 骨架）
 ├── scheduler.py            # APScheduler 定时爬取
 ├── agent.py                # LangChain Tool-calling Agent（核心）
@@ -76,6 +80,10 @@ cp .env.example .env             # Windows: copy .env.example .env
 | `LLM_MAX_TOKENS` | 最大输出 token | `4096` |
 | `EMBEDDING_MODEL` | BGE 向量模型 | `BAAI/bge-large-zh-v1.5` |
 | `EMBEDDING_DEVICE` | `cpu` / `cuda` | `cpu` |
+| `RERANK_ENABLED` | 是否启用 Rerank 精排 | `1`（测试环境 `0`） |
+| `RERANK_MODEL` | Rerank 模型（默认自动探测本地 `models/bge-reranker-v2-m3`，否则回退 HF id） | `BAAI/bge-reranker-v2-m3` |
+| `RERANK_DEVICE` | Rerank 设备 | 同 `EMBEDDING_DEVICE` |
+| `RERANK_CANDIDATE_MULTIPLIER` / `RERANK_MAX_CANDIDATES` | 粗召回倍数 / 候选上限 | `5` / `50` |
 | `WEB_HOST` / `WEB_PORT` | Web 服务监听 | `127.0.0.1` / `8000` |
 
 更多配置项见 `config.py`（爬虫平台、定时调度、大厂名单、路径等）。
