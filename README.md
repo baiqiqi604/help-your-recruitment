@@ -201,6 +201,7 @@ WEB_PORT=8000
 
 ## 📄 文档
 
+- [变更日志（CHANGELOG）](CHANGELOG.md)
 - [PRD（产品需求）](langgraph_version/docs/PRD.md)
 - [技术开发文档](langgraph_version/docs/技术开发文档.md)
 - [面试笔试经验知识库设计](langgraph_version/docs/面试笔试经验知识库设计.md)
