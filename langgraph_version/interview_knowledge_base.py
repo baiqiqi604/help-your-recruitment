@@ -23,32 +23,57 @@ import re
 from functools import lru_cache
 from typing import Any
 
-from config import CHROMA_CONFIG
+from config import CHROMA_CONFIG, RERANK_CONFIG
 
 # 复用岗位知识库的 ChromaDB 客户端与 BGE Embedding（单例）
 from jd_knowledge_base import _get_chroma_client, _get_embedding_function  # noqa: F401
 
+# Rerank 重排（可选依赖：模型加载失败时自动降级为不重排）
+from reranker import rerank
+
 logger = logging.getLogger(__name__)
 
 INTERVIEW_COLLECTION = "interview_kb"
+# 标题索引集合：只存「题目 + 考察点」短文本作为检索单元，
+# 命中后按 id 映射回全文集合（解决长文档 + 短查询向量距离偏高的问题）
+INTERVIEW_TITLE_COLLECTION = "interview_kb_title"
 
 VALID_STAGES = ("HR面", "业务面", "专业面", "主管面", "终面", "笔试")
+
+# 标题文档 id 后缀（用于与全文文档 id 区分，检索后统一还原为全文 id）
+_TITLE_ID_SUFFIX = "#t"
+
+
+def _collection_metadata() -> dict[str, Any]:
+    """ChromaDB Collection 元数据（cosine 空间 + 关闭 Python 侧 sync 阈值）。"""
+    # 关键：hnsw:sync_threshold 必须远大于批量导入条数。
+    # 默认 1000 时，单次导入 ≥1000 条会触发 Python 侧 _persist() 写出损坏的
+    # index_metadata.pickle（dimensionality=None），导致 Rust 核心跨进程加载报
+    # "Error loading hnsw index"；<1000 条不触发、由 Rust 核心从 sqlite 正常管理。
+    # 本项目两库合并共 1973 条，故设为 100000 永不触发。
+    return {"hnsw:space": "cosine", "hnsw:sync_threshold": 100000}
+
+
+def _get_interview_collection_named(name: str):
+    """获取或创建指定名称的面试知识库集合。"""
+    client = _get_chroma_client()
+    return client.get_or_create_collection(
+        name=name,
+        embedding_function=_get_embedding_function(),
+        metadata=_collection_metadata(),
+    )
 
 
 @lru_cache(maxsize=1)
 def _get_interview_collection():
-    """获取或创建 interview_kb 集合（单例缓存）。"""
-    client = _get_chroma_client()
-    return client.get_or_create_collection(
-        name=INTERVIEW_COLLECTION,
-        embedding_function=_get_embedding_function(),
-        # 关键：hnsw:sync_threshold 必须远大于批量导入条数。
-        # 默认 1000 时，单次导入 ≥1000 条会触发 Python 侧 _persist() 写出损坏的
-        # index_metadata.pickle（dimensionality=None），导致 Rust 核心跨进程加载报
-        # "Error loading hnsw index"；<1000 条不触发、由 Rust 核心从 sqlite 正常管理。
-        # 本项目两库合并共 1973 条，故设为 100000 永不触发。
-        metadata={"hnsw:space": "cosine", "hnsw:sync_threshold": 100000},
-    )
+    """获取或创建 interview_kb 全文集合（单例缓存）。"""
+    return _get_interview_collection_named(INTERVIEW_COLLECTION)
+
+
+@lru_cache(maxsize=1)
+def _get_interview_title_collection():
+    """获取或创建 interview_kb_title 标题索引集合（单例缓存）。"""
+    return _get_interview_collection_named(INTERVIEW_TITLE_COLLECTION)
 
 
 def _question_id(item: dict[str, Any]) -> str:
@@ -71,6 +96,18 @@ def _to_document(item: dict[str, Any]) -> str:
         f"考察点：{', '.join(item.get('key_points', []))}",
         f"参考思路：{item.get('reference_answer', '')}",
         f"来源：{item.get('source_url', '')}",
+    ]
+    return "\n".join(p for p in parts if p.split("：", 1)[-1].strip())
+
+
+def _to_title_document(item: dict[str, Any]) -> str:
+    """将题目拼接为用于检索的短文本（仅题目 + 考察点，不含长答案）。
+
+    短文档对短查询的向量距离显著更低，作为检索单元可大幅提升召回。
+    """
+    parts = [
+        f"题目：{item.get('question', '')}",
+        f"考察点：{', '.join(item.get('key_points', []))}",
     ]
     return "\n".join(p for p in parts if p.split("：", 1)[-1].strip())
 
@@ -120,6 +157,16 @@ def clear_interview_kb() -> int:
         logger.warning("清空知识库失败: %s", e)
         return 0
 
+    # 同步清空标题索引集合（保留集合结构）
+    try:
+        title_col = _get_interview_title_collection()
+        title_existing = title_col.get()
+        title_ids = (title_existing or {}).get("ids") or []
+        if title_ids:
+            title_col.delete(ids=title_ids)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("清空标题索引集合失败: %s", e)
+
     logger.info("clear_interview_kb：已清空 %d 道题（保留集合 %s）", len(ids), INTERVIEW_COLLECTION)
     return len(ids)
 
@@ -147,6 +194,7 @@ def add_experiences(items: list[dict[str, Any]]) -> int:
         logger.warning("查询已有题目失败: %s", e)
 
     ids, documents, metadatas = [], [], []
+    title_ids, title_documents, title_metadatas = [], [], []
     for item in items:
         question = str(item.get("question", "")).strip()
         if not question:
@@ -157,15 +205,28 @@ def add_experiences(items: list[dict[str, Any]]) -> int:
         doc = _to_document(item)
         if not doc.strip():
             continue
+        meta = _to_metadata(item)
         ids.append(qid)
         documents.append(doc)
-        metadatas.append(_to_metadata(item))
+        metadatas.append(meta)
+        # 标题索引：id 带后缀，短文本（题目+考察点）作为检索单元
+        title_ids.append(qid + _TITLE_ID_SUFFIX)
+        title_documents.append(_to_title_document(item))
+        title_metadatas.append(meta)
 
     if not ids:
         logger.info("add_experiences：全部题目已存在，无新增")
         return 0
 
     collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    try:
+        title_col = _get_interview_title_collection()
+        title_col.upsert(
+            ids=title_ids, documents=title_documents, metadatas=title_metadatas
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("写入标题索引失败（不影响全文）: %s", e)
+
     logger.info("add_experiences：新增 %d 道题", len(ids))
     return len(ids)
 
@@ -190,6 +251,14 @@ def search_questions(
 
     Returns:
         匹配的题目 dict 列表（按相关度排序，仅含 distance <= max_distance 的条目）
+
+    检索策略（增强）：
+    1. 先查「标题索引集合」（题目+考察点短文本）：短文档对短查询的向量距离
+       更低，大幅提升召回（如 "LRU" 这类简写不再只靠关键词兜底）；
+    2. 标题索引为空（旧库未重建）时自动回退全文集合检索，保持兼容；
+    3. 命中后按 id 映射回全文集合，回填参考答案等长字段；
+    4. 关键词兜底：向量命中不足时按词元子串匹配补召回；
+    5. Rerank 精排：粗召回 top_k*multiplier 条后按 (query, 全文) 重排取 top_k。
     """
     if not query or not query.strip():
         return []
@@ -208,18 +277,42 @@ def search_questions(
     elif len(where_filters) > 1:
         where = {"$and": where_filters}
 
+    n_results = min(
+        top_k * RERANK_CONFIG["candidate_multiplier"],
+        RERANK_CONFIG["max_candidates"],
+    )
+
     try:
-        collection = _get_interview_collection()
-        results = collection.query(
+        results = _get_interview_title_collection().query(
             query_texts=[query.strip()],
-            n_results=top_k,
+            n_results=n_results,
             where=where,
         )
+        used_title = bool(results.get("ids") and results["ids"][0])
     except Exception as e:  # noqa: BLE001
-        logger.warning("面试题检索失败: %s", e)
+        logger.warning("面试题标题检索失败: %s", e)
         return []
 
     questions = _format_results(results)
+    if used_title:
+        # 标题 id 带后缀，统一还原为全文 id（与关键词兜底结果去重一致）
+        for q in questions:
+            qid = str(q.get("id", ""))
+            if qid.endswith(_TITLE_ID_SUFFIX):
+                q["id"] = qid[: -len(_TITLE_ID_SUFFIX)]
+    else:
+        # 标题索引为空（旧库未重建）→ 回退全文集合检索
+        try:
+            results = _get_interview_collection().query(
+                query_texts=[query.strip()],
+                n_results=n_results,
+                where=where,
+            )
+            questions = _format_results(results)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("面试题全文检索失败: %s", e)
+            return []
+
     # 相似度阈值过滤：只保留相关的条目
     filtered = [q for q in questions if q.get("distance") is None or q["distance"] <= max_distance]
     if len(filtered) < len(questions):
@@ -237,7 +330,37 @@ def search_questions(
                 break
         if len(kw_hits):
             logger.info("关键词兜底补充 %d 条", len(kw_hits))
-    return filtered
+
+    if not filtered:
+        return []
+
+    # 回填/汇总全文（标题命中时参考答案等长字段来自全文；重排打分也用全文）
+    docs_by_id = _fetch_full_docs([str(q.get("id", "")) for q in filtered])
+    rerank_texts: list[str] = []
+    for q in filtered:
+        full_doc = docs_by_id.get(str(q.get("id", "")), "")
+        if full_doc:
+            q["reference_answer"] = _extract_field(full_doc, "参考思路")
+            rerank_texts.append(full_doc)
+        else:
+            rerank_texts.append(
+                " ".join(
+                    p
+                    for p in (str(q.get("question", "")), str(q.get("reference_answer", "")))
+                    if p
+                )
+            )
+
+    # Rerank 精排：模型不可用（rerank 返回空）时按向量原序返回
+    reranked = rerank(query, rerank_texts, top_k)
+    if reranked:
+        ordered: list[dict[str, Any]] = []
+        for idx, score in reranked:
+            item = dict(filtered[idx])
+            item["rerank_score"] = score
+            ordered.append(item)
+        return ordered
+    return filtered[:top_k]
 
 
 def _extract_keywords(query: str, max_kw: int = 6) -> list[str]:
@@ -273,6 +396,24 @@ def _keyword_search(query: str, where: Any, top_k: int) -> list[dict[str, Any]]:
     except Exception as e:  # noqa: BLE001
         logger.warning("关键词兜底检索失败: %s", e)
         return []
+
+
+def _fetch_full_docs(ids: list[str]) -> dict[str, str]:
+    """按全文 id 批量取回全文文档（id → 文档文本）。
+
+    标题索引命中后需要映射回全文集合，以获取参考答案等长字段。
+    """
+    if not ids:
+        return {}
+    try:
+        collection = _get_interview_collection()
+        results = collection.get(ids=ids)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("获取全文文档失败: %s", e)
+        return {}
+    if not results or not results.get("ids"):
+        return {}
+    return dict(zip(results["ids"], results["documents"]))
 
 
 def get_questions_by_company(company: str, top_k: int = 20) -> list[dict[str, Any]]:

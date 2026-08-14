@@ -16,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 os.environ["MOCK_LLM"] = "1"
 
+# 测试环境跳过 Rerank 模型加载（bge-reranker-v2-m3 约 2GB，避免下载与不确定性）
+os.environ["RERANK_ENABLED"] = "0"
+
 # ──────────────────────────────────────────────
 # 重型模块桩（避免测试依赖 chromadb / sentence-transformers）
 # ──────────────────────────────────────────────

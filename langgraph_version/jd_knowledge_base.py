@@ -28,9 +28,16 @@ from config import (
     PATH_CONFIG,
     BIG_TECH_COMPANIES,
     HIGH_FREQUENCY_THRESHOLD,
+    RERANK_CONFIG,
 )
 
+# Rerank 重排（可选依赖：模型加载失败时自动降级为不重排）
+from reranker import rerank
+
 logger = logging.getLogger(__name__)
+
+# 标题文档 id 后缀（与全文文档 id 区分，检索后统一还原为 job_id）
+_TITLE_ID_SUFFIX = "#t"
 
 
 # ──────────────────────────────────────────────
@@ -280,6 +287,20 @@ def _job_to_document(job: dict[str, Any]) -> str:
     return "\n".join(p for p in parts if p.split("：", 1)[-1].strip())
 
 
+def _job_to_title_document(job: dict[str, Any]) -> str:
+    """将岗位拼接为用于检索的短文本（岗位名/公司/技能，不含长职位描述）。
+
+    短文档对短查询的向量距离显著更低，作为检索单元可提升召回精度。
+    """
+    parts = [
+        f"岗位：{job.get('title', '')}",
+        f"公司：{job.get('company', '')}",
+        f"城市：{job.get('city', '')}",
+        f"技能：{', '.join(job.get('skills', []))}",
+    ]
+    return "\n".join(p for p in parts if p.split("：", 1)[-1].strip())
+
+
 def _job_to_metadata(job: dict[str, Any]) -> dict[str, Any]:
     """提取岗位的 metadata（ChromaDB 只支持标量值）。"""
     return {
@@ -301,10 +322,11 @@ def _upsert_jobs(jobs: list[dict[str, Any]], clear_existing: bool = False) -> No
     """将岗位列表写入 ChromaDB。"""
     fulltext_col = _get_collection(CHROMA_CONFIG["collection_fulltext"])
     premium_col = _get_collection(CHROMA_CONFIG["collection_premium"])
+    title_col = _get_collection(CHROMA_CONFIG["collection_title"])
 
     if clear_existing:
         # 清空重建（忽略空集合报错）
-        for col in (fulltext_col, premium_col):
+        for col in (fulltext_col, premium_col, title_col):
             try:
                 existing = col.get()
                 if existing and existing.get("ids"):
@@ -313,6 +335,7 @@ def _upsert_jobs(jobs: list[dict[str, Any]], clear_existing: bool = False) -> No
                 logger.warning("清空 Collection 失败: %s", e)
 
     ids, documents, metadatas = [], [], []
+    title_ids, title_docs, title_metas = [], [], []
     premium_ids, premium_docs, premium_metas = [], [], []
 
     for job in jobs:
@@ -326,6 +349,11 @@ def _upsert_jobs(jobs: list[dict[str, Any]], clear_existing: bool = False) -> No
         documents.append(doc)
         metadatas.append(meta)
 
+        # 标题索引：短文本（岗位名/公司/技能，不含职位描述），id 带后缀
+        title_ids.append(job_id + _TITLE_ID_SUFFIX)
+        title_docs.append(_job_to_title_document(job))
+        title_metas.append(meta)
+
         # 大厂或高频岗位进入 premium 集合
         if meta["is_big_tech"] or meta["is_high_frequency"]:
             premium_ids.append(job_id)
@@ -336,6 +364,11 @@ def _upsert_jobs(jobs: list[dict[str, Any]], clear_existing: bool = False) -> No
         fulltext_col.upsert(ids=ids, documents=documents, metadatas=metadatas)
     if premium_ids:
         premium_col.upsert(ids=premium_ids, documents=premium_docs, metadatas=premium_metas)
+    try:
+        if title_ids:
+            title_col.upsert(ids=title_ids, documents=title_docs, metadatas=title_metas)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("写入岗位标题索引失败（不影响全文）: %s", e)
 
     logger.info("写入 fulltext %d 条，premium %d 条", len(ids), len(premium_ids))
 
@@ -352,29 +385,95 @@ def search_jds(
 
     Returns:
         匹配的岗位字典列表（按相关度排序）
-    """
-    try:
-        collection = _get_collection(
-            CHROMA_CONFIG["collection_premium"] if filter_big_tech
-            else CHROMA_CONFIG["collection_fulltext"]
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("知识库不可用（缺 chromadb/embedding 依赖）: %s", e)
-        return []
 
+    检索策略（增强）：
+    1. 先查「岗位标题/技能短文本索引」（jd_title），短文档对短查询召回更准；
+    2. 标题索引为空（旧库未重建）时回退全文/优质集合检索，保持兼容；
+    3. 命中后按 job_id 映射回全文集合，取回完整 JD；
+    4. Rerank 精排：粗召回 top_k*multiplier 条后按 (query, 全文) 重排取 top_k。
+    """
+    n_results = min(
+        top_k * RERANK_CONFIG["candidate_multiplier"],
+        RERANK_CONFIG["max_candidates"],
+    )
     where_filter = {"is_big_tech": True} if filter_big_tech else None
 
     try:
-        results = collection.query(
+        title_col = _get_collection(CHROMA_CONFIG["collection_title"])
+        results = title_col.query(
             query_texts=[query],
-            n_results=top_k,
+            n_results=n_results,
             where=where_filter,
         )
+        used_title = bool(results.get("ids") and results["ids"][0])
     except Exception as e:  # noqa: BLE001
-        logger.warning("岗位检索失败: %s", e)
-        return []
+        logger.warning("岗位标题检索失败: %s", e)
+        used_title = False
+        results = None
 
-    return _format_query_results(results)
+    if not used_title:
+        # 标题索引为空或不可用 → 回退全文/优质集合检索（兼容旧库）
+        try:
+            collection = _get_collection(
+                CHROMA_CONFIG["collection_premium"] if filter_big_tech
+                else CHROMA_CONFIG["collection_fulltext"]
+            )
+            results = collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where=where_filter,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("知识库不可用（缺 chromadb/embedding 依赖）: %s", e)
+            return []
+
+    jobs = _format_query_results(results)
+    if used_title:
+        # 标题 id 带后缀，统一还原为 job_id，并从全文集合取回完整 JD
+        for job in jobs:
+            jid = str(job.get("job_id", ""))
+            if jid.endswith(_TITLE_ID_SUFFIX):
+                job["job_id"] = jid[: -len(_TITLE_ID_SUFFIX)]
+        full_map = _fetch_full_jobs([j["job_id"] for j in jobs])
+        for job in jobs:
+            full = full_map.get(job["job_id"])
+            if full and full.get("jd_text"):
+                job["jd_text"] = full["jd_text"]
+
+    # Rerank 精排：模型不可用（rerank 返回空）时按向量原序返回
+    reranked = rerank(query, [j.get("jd_text") or j.get("title", "") for j in jobs], top_k)
+    if reranked:
+        ordered: list[dict[str, Any]] = []
+        for idx, score in reranked:
+            job = dict(jobs[idx])
+            job["rerank_score"] = score
+            ordered.append(job)
+        return ordered
+    return jobs[:top_k]
+
+
+def _fetch_full_jobs(job_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """按 job_id 批量取回全文岗位（job_id → {metadata..., jd_text}）。"""
+    if not job_ids:
+        return {}
+    try:
+        collection = _get_collection(CHROMA_CONFIG["collection_fulltext"])
+        results = collection.get(ids=job_ids)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("获取岗位全文失败: %s", e)
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    if not results or not results.get("ids"):
+        return out
+    metadatas = results.get("metadatas") or [{}]
+    documents = results.get("documents") or []
+    for idx, jid in enumerate(results["ids"]):
+        meta = metadatas[idx] if idx < len(metadatas) and metadatas[idx] else {}
+        job = dict(meta)
+        job["job_id"] = jid
+        job["jd_text"] = documents[idx] if idx < len(documents) else ""
+        out[jid] = job
+    return out
 
 
 def _format_query_results(results: dict[str, Any]) -> list[dict[str, Any]]:

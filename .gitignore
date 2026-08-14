@@ -57,3 +57,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 .ipynb_checkpoints/
+
+# ── 本地模型（Rerank 权重约 2.2GB，不入库；下载方式见根 README）──
+models/
+
+# ── 本地验证产物 ──
+web_verify.*
