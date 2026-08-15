@@ -141,6 +141,19 @@
 
     /* ── 表单 ── */
     .form-row { margin-bottom: 16px; }
+    .label-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px; gap: 10px;
+    }
+    .label-row label { margin-bottom: 0; }
+    .btn-mini {
+      border: 1px solid var(--border); background: #fff; color: var(--primary);
+      padding: 4px 12px; border-radius: 8px; cursor: pointer;
+      font-size: 12px; font-weight: 500; white-space: nowrap;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .btn-mini:hover { background: var(--primary-light); border-color: #5eead4; }
+    .btn-mini.copied { background: #ccfbf1; border-color: #5eead4; color: #0f766e; }
     label {
       display: block; font-size: 13px; font-weight: 500;
       color: var(--text-secondary); margin-bottom: 6px;
@@ -348,8 +361,13 @@
       </div>
 
       <div class="form-row">
-        <label>优化后简历（可直接复制编辑）</label>
-        <textarea id="optimized-text" rows="16" readonly></textarea>
+        <div class="label-row">
+          <label>优化后简历（可直接复制粘贴）</label>
+          <button type="button" class="btn-mini" id="copy-optimized-btn" onclick="copyOptimized()">
+            <i class="ti ti-copy"></i> 复制全文
+          </button>
+        </div>
+        <textarea id="optimized-text" rows="18" readonly></textarea>
       </div>
 
       <div class="form-row">
@@ -630,6 +648,26 @@
         setStatus("error", "优化失败：" + err.message);
       } finally {
         btn.disabled = false;
+      }
+    }
+
+    function copyOptimized() {
+      const box = document.getElementById("optimized-text");
+      const btn = document.getElementById("copy-optimized-btn");
+      if (!box || !box.value) { setStatus("error", "还没有优化结果可复制"); return; }
+      const done = () => {
+        btn.classList.add("copied");
+        const oldHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="ti ti-check"></i> 已复制';
+        setTimeout(() => { btn.classList.remove("copied"); btn.innerHTML = oldHtml; }, 1500);
+      };
+      // 优先使用剪贴板 API（异步），失败则回退到 select + execCommand
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(box.value).then(done).catch(() => {
+          box.select(); document.execCommand("copy"); done();
+        });
+      } else {
+        box.select(); document.execCommand("copy"); done();
       }
     }
 
