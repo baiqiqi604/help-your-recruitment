@@ -145,32 +145,10 @@ def get_agent():
 
 
 def _extract_reply_text(content: Any) -> str:
-    """从 Agent 返回的 content 中安全提取纯文本。
+    """从 Agent 返回的 content 中安全提取纯文本（委托 llm_client 公共实现）。"""
+    from llm_client import extract_text_content
 
-    langchain 1.x 的 message.content 可能是：
-      - str：普通文本（最常见）
-      - list[dict]：content blocks（如 [{"type": "text", "text": "..."}]）
-    直接 str() 会把 blocks 的原始结构打出来，这里统一提取文本。
-    """
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                if block.get("type") == "text":
-                    parts.append(str(block.get("text", "")))
-                else:
-                    # 非文本块（如 tool_use / image），至少保留可见字段
-                    text = block.get("text") or block.get("content") or ""
-                    if text:
-                        parts.append(str(text))
-            else:
-                parts.append(str(block))
-        return "".join(parts)
-    return str(content)
+    return extract_text_content(content)
 
 
 def chat_with_agent(user_input: str, session_id: str) -> str:

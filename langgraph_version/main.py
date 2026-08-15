@@ -18,7 +18,6 @@ import argparse
 import json
 import logging
 import sys
-import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -37,31 +36,10 @@ def _setup_logging() -> None:
 
 
 def _load_resume_text(resume_path: str) -> str:
-    """按文件类型读取简历文本：.pdf/.docx/.txt。"""
-    path = Path(resume_path)
-    if not path.exists():
-        raise FileNotFoundError(f"简历文件不存在: {resume_path}")
+    """按文件类型读取简历文本：.pdf/.docx/.txt（统一走 resume_reader.read_resume_text）。"""
+    from resume_reader import read_resume_text
 
-    suffix = path.suffix.lower()
-
-    if suffix == ".txt":
-        return path.read_text(encoding="utf-8", errors="replace")
-
-    # PDF / DOCX 统一走 resume_reader（pdf 先转 docx）
-    from resume_reader import pdf_to_docx, read_resume
-
-    temp_docx = path
-    if suffix == ".pdf":
-        temp_docx = Path(tempfile.gettempdir()) / f"{path.stem}_graph_temp.docx"
-        pdf_to_docx(str(path), str(temp_docx))
-
-    try:
-        data = read_resume(str(temp_docx))
-    finally:
-        if suffix == ".pdf" and temp_docx.exists():
-            temp_docx.unlink(missing_ok=True)
-
-    return data["full_text"]
+    return read_resume_text(resume_path)
 
 
 def _load_jd_text(jd_path: str, job_id: str) -> str:

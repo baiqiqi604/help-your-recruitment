@@ -76,12 +76,31 @@ LLM_PROVIDERS = {
 # 当前启用的 provider（deepseek / openai / dashscope / zhipu）
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek").lower()
 
-if LLM_PROVIDER not in LLM_PROVIDERS:
-    raise ValueError(
-        f"不支持的 LLM_PROVIDER: {LLM_PROVIDER}，可选: {', '.join(LLM_PROVIDERS)}"
-    )
+# 校验延迟到 validate_config()（真正使用 LLM 前调用），
+# 避免 import config 在非交互场景（IDE 索引 / 文档工具 / 静态分析）被抛错打断。
+_PROVIDER_CFG = LLM_PROVIDERS.get(LLM_PROVIDER)
 
-_PROVIDER_CFG = LLM_PROVIDERS[LLM_PROVIDER]
+
+def validate_config() -> None:
+    """校验 LLM Provider 配置；非法时抛 ValueError。
+
+    说明：import config 不再直接抛错，由调用方在真正使用 LLM 前显式调用
+    （llm_client._make_llm / web 启动预热）。
+    """
+    if LLM_PROVIDER not in LLM_PROVIDERS:
+        raise ValueError(
+            f"不支持的 LLM_PROVIDER: {LLM_PROVIDER}，可选: {', '.join(LLM_PROVIDERS)}"
+        )
+
+
+if _PROVIDER_CFG is None:
+    # 非法 provider：占位配置（api_key 为空），真正使用时由 validate_config() 拒绝
+    _PROVIDER_CFG = {
+        "label": LLM_PROVIDER,
+        "env_key": "",
+        "base_url": "",
+        "model_name": "",
+    }
 
 LLM_CONFIG = {
     "provider": LLM_PROVIDER,

@@ -446,22 +446,21 @@ def download_file(filename: str) -> Any:
 # 简历文件上传接口（.pdf / .docx / .txt）
 # ──────────────────────────────────────────────
 def _parse_resume_file(path: str, suffix: str) -> str:
-    """按扩展名解析简历文件为纯文本（.txt 直读，.pdf 先转 docx 再提取）。"""
-    if suffix == ".txt":
-        return Path(path).read_text(encoding="utf-8", errors="replace")
+    """按扩展名解析简历文件为纯文本（统一走 resume_reader.read_resume_text）。"""
+    from resume_reader import read_resume_text
 
-    from resume_reader import pdf_to_docx, read_resume
+    return read_resume_text(path)
 
-    docx_path = path
-    if suffix == ".pdf":
-        docx_path = str(Path(path).with_suffix(".docx"))
-        pdf_to_docx(path, docx_path)
-    try:
-        data = read_resume(docx_path)
-    finally:
-        if suffix == ".pdf" and Path(docx_path).exists():
-            Path(docx_path).unlink(missing_ok=True)
-    return data["full_text"]
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 上传简历大小上限：10MB
+MAX_TOP_K = 200  # 检索接口 top_k / limit 上限，防止异常大值拖慢检索
+
+
+def _clamp_top_k(top_k: int, default: int = 10) -> int:
+    """把 top_k 钳制到 [1, MAX_TOP_K]；非正数用 default（exp_search 的 0=全量语义由调用方保留）。"""
+    if top_k <= 0:
+        return default
+    return min(top_k, MAX_TOP_K)
 
 
 @app.post("/api/upload")
@@ -483,7 +482,12 @@ async def upload_resume(file: UploadFile = File(...)) -> dict[str, Any]:
     tmp_dir.mkdir(parents=True, exist_ok=True)
     src_path = tmp_dir / f"resume{suffix}"
     try:
-        content = await file.read()
+        # 分块读取并限制大小，防止超大文件一次性读入内存拖垮服务
+        content = bytearray()
+        while chunk := await file.read(1024 * 1024):
+            content.extend(chunk)
+            if len(content) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="文件过大（上限 10MB）")
         src_path.write_bytes(content)
 
         text = _parse_resume_file(str(src_path), suffix)
@@ -518,6 +522,7 @@ def search_jobs(q: str = "", top_k: int = 10) -> dict[str, Any]:
     if not query:
         return {"jobs": [], "degraded": True, "note": "岗位知识库已降级，数据有限"}
 
+    top_k = _clamp_top_k(top_k)
     logger.info("/api/jobs/search：q=%s top_k=%d", query, top_k)
     jobs = search_jds(query, top_k=top_k)
     return {"jobs": jobs, "degraded": True, "note": "岗位知识库已降级，数据有限"}
@@ -528,6 +533,7 @@ def premium_jobs(limit: int = 50) -> dict[str, Any]:
     """获取大厂/高频优质岗位接口（岗位库已降级，数据有限，仅供参考）。"""
     from jd_knowledge_base import get_premium_jobs
 
+    limit = _clamp_top_k(limit, default=50)
     logger.info("/api/jobs/premium：limit=%d", limit)
     jobs = get_premium_jobs(limit=limit)
     return {"jobs": jobs, "degraded": True, "note": "岗位知识库已降级，数据有限"}
@@ -621,7 +627,9 @@ def exp_search(
     if not query:
         return {"questions": [], "total": 0}
     if top_k <= 0:
-        top_k = count_questions() or 100
+        top_k = count_questions() or 100  # 0=全量语义
+    else:
+        top_k = min(top_k, MAX_TOP_K)
     logger.info("/api/exp/search：q=%s company=%s role=%s stage=%s top_k=%d max_distance=%.2f", query, company, role, stage, top_k, max_distance)
     questions = search_questions(
         query, company=company, role=role, stage=stage,
@@ -637,6 +645,7 @@ def exp_company(company: str = "", top_k: int = 20) -> dict[str, Any]:
 
     if not company or not company.strip():
         return {"questions": []}
+    top_k = _clamp_top_k(top_k, default=20)
     logger.info("/api/exp/company：company=%s top_k=%d", company, top_k)
     questions = get_questions_by_company(company.strip(), top_k=top_k)
     return {"questions": questions}
@@ -647,6 +656,7 @@ def exp_algorithm(role: str = "", top_k: int = 20) -> dict[str, Any]:
     """获取笔试算法题（可选按岗位过滤）。"""
     from interview_knowledge_base import get_algorithm_questions
 
+    top_k = _clamp_top_k(top_k, default=20)
     logger.info("/api/exp/algorithm：role=%s top_k=%d", role, top_k)
     questions = get_algorithm_questions(role=role, top_k=top_k)
     return {"questions": questions}

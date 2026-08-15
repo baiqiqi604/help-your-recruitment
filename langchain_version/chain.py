@@ -99,6 +99,8 @@ def _load(state: dict[str, Any]) -> dict[str, Any]:
 
 def _analyze(state: dict[str, Any]) -> dict[str, Any]:
     """analyze：调用大模型拆解岗位需求（要求分级/岗位类型/隐含目标/风险项）。"""
+    if state.get("error"):
+        return state  # 前置节点已失败，短路（对齐 graph 版条件边语义）
     from jd_analyzer import analyze_jd as analyze_jd_text
 
     logger.info("analyze：开始拆解岗位需求...")
@@ -112,6 +114,8 @@ def _analyze(state: dict[str, Any]) -> dict[str, Any]:
 
 def _research(state: dict[str, Any]) -> dict[str, Any]:
     """research：分析目标公司并给出求职判断。"""
+    if state.get("error"):
+        return state  # 短路
     from company_researcher import research_company as research
 
     logger.info("research：分析目标公司 %s ...", state.get("target_company", ""))
@@ -129,6 +133,8 @@ def _research(state: dict[str, Any]) -> dict[str, Any]:
 
 def _optimize(state: dict[str, Any]) -> dict[str, Any]:
     """optimize：按 JD 分析结果定制简历内容。"""
+    if state.get("error"):
+        return state  # 短路
     from content_optimizer import optimize_resume_content
 
     resume_text = state["resume_text"]
@@ -150,6 +156,8 @@ def _optimize(state: dict[str, Any]) -> dict[str, Any]:
 
 def _matching(state: dict[str, Any]) -> dict[str, Any]:
     """matching：构建简历-JD 四级匹配关系表（失败不阻塞主流程，置空即可）。"""
+    if state.get("error"):
+        return state  # 短路
     from content_optimizer import build_matching_table
 
     try:
@@ -169,6 +177,8 @@ def _review(state: dict[str, Any]) -> dict[str, Any]:
     optimized_text = (state.get("optimized_text") or "").strip()
     if not optimized_text:
         return {**state, "review_verdict": {"pass": False, "feedback": "优化结果为空"}}
+    if state.get("error"):
+        return state  # 前置节点已失败，短路
 
     jd_analysis = state.get("jd_analysis") or {}
     resume_text = (state.get("resume_text") or "")[:MAX_RESUME_CHARS]
@@ -220,6 +230,8 @@ def _review(state: dict[str, Any]) -> dict[str, Any]:
 
 def _interview(state: dict[str, Any]) -> dict[str, Any]:
     """interview：按岗位类型生成面试问题 + 生成完整面试建议。"""
+    if state.get("error"):
+        return state  # 短路
     from interview_advisor import build_interview_advice, generate_interview_questions
 
     jd_analysis = state.get("jd_analysis") or {}
@@ -256,6 +268,8 @@ def _sanitize_filename(name: str) -> str:
 
 def _write(state: dict[str, Any]) -> dict[str, Any]:
     """write：生成定制化简历与面试建议 Word 文档。"""
+    if state.get("error"):
+        return state  # 前置节点已失败，短路（不再覆盖 error）
     from resume_writer import write_customized_resume, write_interview_advice_docx
 
     target_company = _sanitize_filename(state.get("target_company", "") or "未知公司")

@@ -12,6 +12,8 @@ PDF 解析模块
 from __future__ import annotations
 
 import logging
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +134,43 @@ def read_resume(docx_path: str) -> dict[str, Any]:
         "tables": tables,
         "full_text": full_text,
     }
+
+
+def read_resume_text(path: str) -> str:
+    """按扩展名读取简历纯文本（.txt 直读，.pdf 先转 docx 再提取，.docx 直接提取）。
+
+    作为 main.py / web_app.py 的统一简历读取入口，消除两处重复的
+    pdf_to_docx + read_resume 流程。
+
+    Args:
+        path: 简历文件路径（.pdf / .docx / .txt）
+
+    Returns:
+        简历全文纯文本
+
+    Raises:
+        FileNotFoundError: 文件不存在
+        ValueError: 不支持的扩展名
+    """
+    file_path = Path(path)
+    if not file_path.exists():
+        raise FileNotFoundError(f"简历文件不存在: {path}")
+
+    suffix = file_path.suffix.lower()
+    if suffix == ".txt":
+        return file_path.read_text(encoding="utf-8", errors="replace")
+    if suffix == ".docx":
+        return read_resume(str(file_path))["full_text"]
+    if suffix == ".pdf":
+        # 转 docx 写入系统临时目录（避免污染源文件所在目录），用完即删
+        docx_path = Path(tempfile.gettempdir()) / f"{file_path.stem}_{uuid.uuid4().hex[:8]}.docx"
+        pdf_to_docx(str(file_path), str(docx_path))
+        try:
+            return read_resume(str(docx_path))["full_text"]
+        finally:
+            docx_path.unlink(missing_ok=True)
+
+    raise ValueError(f"不支持的简历文件类型: {suffix}（仅支持 .pdf / .docx / .txt）")
 
 
 def _extract_font_info(paragraph) -> dict[str, Any]:

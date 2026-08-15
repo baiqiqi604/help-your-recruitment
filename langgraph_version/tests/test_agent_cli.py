@@ -163,13 +163,44 @@ class TestConfigValidation:
         )
         return result.returncode
 
+    def _run_validate_config(self, extra_env: dict[str, str]) -> int:
+        env = dict(os.environ)
+        env["MOCK_LLM"] = "1"
+        env.update(extra_env)
+        result = subprocess.run(
+            [sys.executable, "-c", "import config; config.validate_config()"],
+            cwd=self.LANGGRAPH_DIR,
+            env=env,
+            capture_output=True,
+            timeout=60,
+        )
+        return result.returncode
+
     def test_valid_provider_imports_ok(self) -> None:
         assert self._run_import_config({"LLM_PROVIDER": "deepseek"}) == 0
         assert self._run_import_config({"LLM_PROVIDER": "zhipu"}) == 0
 
-    def test_invalid_provider_raises(self) -> None:
-        # config 模块对非法 provider 直接抛 ValueError → 子进程退出码非 0
-        assert self._run_import_config({"LLM_PROVIDER": "bogus_provider"}) != 0
+    def test_invalid_provider_import_ok(self) -> None:
+        # 校验已延迟：非法 provider 时 import config 不再抛错（退出码 0）
+        assert self._run_import_config({"LLM_PROVIDER": "bogus_provider"}) == 0
+
+    def test_invalid_provider_validate_raises(self) -> None:
+        # 显式调用 validate_config() 时抛 ValueError → 子进程退出码非 0
+        assert self._run_validate_config({"LLM_PROVIDER": "bogus_provider"}) != 0
+
+    def test_invalid_provider_api_key_placeholder_empty(self) -> None:
+        # 非法 provider 时 LLM_CONFIG 使用空 api_key 占位（避免 import 崩溃）
+        env = dict(os.environ)
+        env["MOCK_LLM"] = "1"
+        env["LLM_PROVIDER"] = "bogus_provider"
+        result = subprocess.run(
+            [sys.executable, "-c", "import config; print(repr(config.LLM_CONFIG['api_key']))"],
+            cwd=self.LANGGRAPH_DIR,
+            env=env,
+            capture_output=True,
+            timeout=60,
+        )
+        assert result.stdout.decode("utf-8", "replace").strip() == "''"
 
     def test_default_provider_is_deepseek(self) -> None:
         env = dict(os.environ)

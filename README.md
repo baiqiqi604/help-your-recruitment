@@ -30,9 +30,11 @@
 > ✅ **版本维护约定（2026-08-15 起）**：`langchain_version` 由「冻结参考版」转为
 > **并行开发版**，与主力版同步开发。工作流：改动先在 `langgraph_version` 落地，
 > 随后同步到 `langchain_version`；两版共享同一 ChromaDB 向量库、检索层
-> （`jd_knowledge_base.py` / `interview_knowledge_base.py` / `reranker.py` / `config.py`）、
+> （`jd_knowledge_base.py` / `interview_knowledge_base.py` / `reranker.py`）、
 > 结构化输出（`schemas.py` + PydanticOutputParser）、Retriever 抽象（`retrievers.py`）
-> 与 SSE 流式对话。框架差异：LangGraph（StateGraph 图编排）vs LangChain（Tool-calling Agent + LCEL 管道）。
+> 与 SSE 流式对话。共享文件（`llm_client.py` / `resume_reader.py` 等 18 个）必须逐字节
+> 一致，由 `scripts/check_sync.py` 在 CI 中把关防漂移。
+> 框架差异：LangGraph（StateGraph 图编排）vs LangChain（Tool-calling Agent + LCEL 管道）。
 
 ## 🚀 快速开始
 
@@ -129,6 +131,7 @@ python _ingest_ai_pm_bank.py "AI产品经理1000题面试题库.docx"
 |------|------|------|
 | GET | `/` | Web 前端页面 |
 | POST | `/api/chat` | 对话答疑（RAG 优先，多轮记忆 session_id） |
+| POST | `/api/chat/stream` | SSE 流式对话（打字机效果，RAG 优先分流） |
 | POST | `/api/optimize` | 定制化简历优化（简历 + JD + 目标公司） |
 | POST | `/api/upload` | 上传简历文件（.pdf/.docx/.txt）解析为文本 |
 | GET | `/api/download?filename=` | 下载生成的 Word 文档 |
@@ -138,6 +141,7 @@ python _ingest_ai_pm_bank.py "AI产品经理1000题面试题库.docx"
 | POST | `/api/exp/upload` | 手动面经入库 |
 | GET | `/api/exp/count` | 题库题目总数 |
 | GET | `/api/jobs/search` | 岗位检索（标题索引 + Rerank） |
+| GET | `/api/jobs/premium` | 优质岗位（大厂/高频，已降级） |
 | GET | `/api/health` | 健康检查 |
 
 ## 🗂️ 项目结构（langgraph_version）
@@ -162,8 +166,7 @@ langgraph_version/
 ├── web_app.py                  # FastAPI 应用
 ├── main.py                     # 入口（web / chat / optimize / doctor）
 ├── validate_runtime.py         # 运行环境自检（main.py doctor）
-├── test_core_pipeline.py       # 核心流水线测试（unittest）
-├── tests/                      # pytest 套件（图流程 / Web API / 检索 / LLM JSON 解析）
+├── tests/                      # pytest 套件（图流程 / Web API / 检索 / main CLI / SSE 流式）
 ├── templates/index.html        # 单页前端（聊天/简历优化/面试题库）
 ├── desktop/                    # exe 打包目录（PyInstaller）
 ├── docs/                       # PRD / 技术开发文档 / 启动指南 / 题库设计

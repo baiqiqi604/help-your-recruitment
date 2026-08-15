@@ -6,14 +6,44 @@ on:
   pull_request:
 
 jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 双版本共享文件同步一致性检查
+        # langchain_version 与 langgraph_version 的共享文件必须逐字节一致
+        # （约定：改动先在 langgraph 落地，随后同步到 langchain）
+        run: python scripts/check_sync.py
+
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.10", "3.11"]
+        include:
+          - version: langgraph_version
+            cov_modules: >-
+              --cov=config --cov=llm_client --cov=graph --cov=agent
+              --cov=jd_analyzer --cov=content_optimizer --cov=company_researcher
+              --cov=interview_advisor --cov=resume_reader --cov=resume_writer
+              --cov=interview_knowledge_base --cov=jd_knowledge_base
+              --cov=web_app --cov=validate_runtime --cov=main --cov=experience_processor
+          - version: langchain_version
+            cov_modules: >-
+              --cov=config --cov=llm_client --cov=chain --cov=agent
+              --cov=jd_analyzer --cov=content_optimizer --cov=company_researcher
+              --cov=interview_advisor --cov=resume_reader --cov=resume_writer
+              --cov=interview_knowledge_base --cov=jd_knowledge_base
+              --cov=web_app --cov=validate_runtime --cov=main --cov=experience_processor
+              --cov=jd_crawler --cov=scheduler
     defaults:
       run:
-        working-directory: langgraph_version
+        working-directory: ${{ matrix.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,9 +63,5 @@ jobs:
         # 注意：--cov 必须指向被测源码而非 tests 包自身，否则覆盖率恒为 ~100% 无意义
         run: >-
           pytest
-          --cov=config --cov=llm_client --cov=graph --cov=agent
-          --cov=jd_analyzer --cov=content_optimizer --cov=company_researcher
-          --cov=interview_advisor --cov=resume_reader --cov=resume_writer
-          --cov=interview_knowledge_base --cov=jd_knowledge_base
-          --cov=web_app --cov=validate_runtime --cov=main --cov=experience_processor
+          ${{ matrix.cov_modules }}
           --cov-report=term-missing --cov-fail-under=60

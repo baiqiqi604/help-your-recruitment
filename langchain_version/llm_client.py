@@ -16,7 +16,7 @@ import re
 from functools import lru_cache
 from typing import Any, Callable
 
-from config import LLM_CONFIG
+from config import LLM_CONFIG, validate_config
 
 logger = logging.getLogger(__name__)
 
@@ -318,8 +318,39 @@ def _mock_chat(
     return _MOCK_GENERIC_REPLY
 
 
+def extract_text_content(content: Any) -> str:
+    """从 LangChain 消息 content 中安全提取纯文本。
+
+    langchain 1.x 的 message.content 可能是：
+      - str：普通文本（最常见）
+      - list[dict]：content blocks（如 [{"type": "text", "text": "..."}]）
+    直接 str() 会把 blocks 的原始结构打出来，这里统一提取文本。
+    供 chat() / stream_chat() / agent 回复提取共用。
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(str(block.get("text", "")))
+                else:
+                    # 非文本块（如 tool_use / image），至少保留可见字段
+                    text = block.get("text") or block.get("content") or ""
+                    if text:
+                        parts.append(str(text))
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(content)
+
+
 def _make_llm(max_tokens: int | None = None):
     """构建 ChatOpenAI 客户端；max_tokens 可覆盖全局配置（用于短输出场景提速）。"""
+    validate_config()  # 非法 provider 在此显式校验（import config 不再抛错）
     try:
         from langchain_openai import ChatOpenAI
     except ImportError as e:
@@ -383,7 +414,7 @@ def chat(
     messages.append(HumanMessage(content=prompt))
 
     response = llm.invoke(messages)
-    return response.content
+    return extract_text_content(response.content)
 
 
 def stream_chat(
@@ -421,8 +452,9 @@ def stream_chat(
     messages.append(HumanMessage(content=prompt))
 
     for chunk in llm.stream(messages):
-        if chunk.content:
-            yield chunk.content
+        text = extract_text_content(chunk.content)
+        if text:
+            yield text
 
 
 def chat_json(

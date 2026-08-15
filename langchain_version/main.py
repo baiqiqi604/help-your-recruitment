@@ -110,29 +110,10 @@ def run_doctor() -> int:
 
 
 def _read_resume_text(resume_path: str) -> str:
-    """按扩展名读取简历文本（.pdf/.docx/.txt，与 langgraph 版一致）。"""
-    import tempfile
+    """按扩展名读取简历文本（.pdf/.docx/.txt，统一走 resume_reader.read_resume_text）。"""
+    from resume_reader import read_resume_text
 
-    from resume_reader import pdf_to_docx, read_resume
-
-    path = Path(resume_path)
-    if not path.exists():
-        raise FileNotFoundError(f"简历文件不存在: {resume_path}")
-
-    suffix = path.suffix.lower()
-    if suffix == ".txt":
-        return path.read_text(encoding="utf-8", errors="replace").strip()
-
-    temp_docx = path
-    if suffix == ".pdf":
-        temp_docx = Path(tempfile.gettempdir()) / f"{path.stem}_lc_temp.docx"
-        pdf_to_docx(str(path), str(temp_docx))
-    try:
-        data = read_resume(str(temp_docx))
-    finally:
-        if suffix == ".pdf" and temp_docx.exists():
-            temp_docx.unlink(missing_ok=True)
-    return data["full_text"].strip()
+    return read_resume_text(resume_path).strip()
 
 
 def run_optimize(
