@@ -109,7 +109,7 @@ class TestContentOptimizer:
         import llm_client
 
         monkeypatch.setattr(
-            llm_client, "chat_json_array", lambda *a, **k: (_ for _ in ()).throw(ValueError("解析失败"))
+            llm_client, "chat_structured", lambda *a, **k: (_ for _ in ()).throw(ValueError("解析失败"))
         )
         rows = content_optimizer.build_matching_table(SAMPLE_RESUME, SAMPLE_JD_ANALYSIS)
         assert rows == []

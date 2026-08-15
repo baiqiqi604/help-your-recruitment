@@ -23,13 +23,16 @@
 
 | 目录 | 内容 | 状态 |
 |------|------|------|
-| `langgraph_version/` | **LangGraph 版（主力）**：图编排 + 面试题库 + 答疑 + RAG 检索增强 | ✅ 推荐 |
-| `langchain_version/` | LangChain 版：Tool-calling Agent + 线性流水线 | 🔒 冻结（RAG 检索层已同步至与主力版一致，2026-08-14） |
+| `langgraph_version/` | **LangGraph 版（主力）**：图编排 + 面试题库 + 答疑 + RAG 检索增强 + SSE 流式 | ✅ 推荐 |
+| `langchain_version/` | **LangChain 版（并行开发）**：Tool-calling Agent + LCEL 管道 + Retriever 抽象 + 结构化输出 + SSE 流式 | ✅ 并行维护 |
 | `resume_optimizer/` | 历史初版（LangChain 0.3 线性流水线） | 🔒 冻结（仅参考） |
 
-> 🔒 **版本维护约定**：代码修复、安全更新与测试只落在 `langgraph_version`（主力版）。
-> `langchain_version` 其余功能不再同步维护；但两版的 **RAG 检索层（`jd_knowledge_base.py` /
-> `interview_knowledge_base.py` / `reranker.py` / `config.py`）已保持同步**，且共享同一 ChromaDB 目录。
+> ✅ **版本维护约定（2026-08-15 起）**：`langchain_version` 由「冻结参考版」转为
+> **并行开发版**，与主力版同步开发。工作流：改动先在 `langgraph_version` 落地，
+> 随后同步到 `langchain_version`；两版共享同一 ChromaDB 向量库、检索层
+> （`jd_knowledge_base.py` / `interview_knowledge_base.py` / `reranker.py` / `config.py`）、
+> 结构化输出（`schemas.py` + PydanticOutputParser）、Retriever 抽象（`retrievers.py`）
+> 与 SSE 流式对话。框架差异：LangGraph（StateGraph 图编排）vs LangChain（Tool-calling Agent + LCEL 管道）。
 
 ## 🚀 快速开始
 

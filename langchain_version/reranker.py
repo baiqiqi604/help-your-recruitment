@@ -8,7 +8,7 @@
 - 懒加载 + lru_cache：首次调用才加载模型；加载失败后缓存 None，不再重试；
 - 优雅降级：模型加载失败 / 打分失败时返回空列表，调用方按向量原序返回，
   不影响检索功能；
-- 测试环境通过 RERANK_ENABLED=0 跳过模型加载。
+- 测试环境通过 RERANK_ENABLED=0 跳过模型加载（tests/conftest.py 已设置）。
 """
 
 from __future__ import annotations

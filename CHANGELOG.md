@@ -12,6 +12,35 @@
 
 ---
 
+## 2026-08-15 — 框架能力补全 + langchain 版转并行开发
+
+### 新增
+- **feat** 结构化输出（Output Parser）：两版新增 `schemas.py`（JDAnalysis / MatchingRow Pydantic 模型）
+  与 `llm_client.chat_structured`（PydanticOutputParser + 解析失败自动降级手写解析）；
+  `jd_analyzer.analyze_jd` / `content_optimizer.build_matching_table` 改用结构化解析。
+- **feat** 检索层 Retriever 抽象：两版新增 `retrievers.py`（`InterviewKBRetriever` / `JDKBRetriever`，
+  继承 `BaseRetriever`），`agent.py` 的 `answer_from_kb` 工具改走 `retriever.invoke()`，
+  内部检索链路（标题索引 → 阈值 → 关键词 → Rerank）保持不变。
+- **feat** SSE 流式对话：两版新增 `/api/chat/stream` 端点（打字机效果）、`llm_client.stream_chat`
+  （ChatOpenAI.stream 逐块产出，MOCK 按 12 字符切块模拟）与 `agent.astream_chat`
+  （astream_events 监听 on_chat_model_stream）；前端聊天 Tab 改流式渲染并保留 JSON 接口兜底。
+- **feat** LCEL 简历优化管道（langchain 版）：新增 `chain.py`，用 RunnableSequence（`|` 组合）
+  编排 load → analyze → research → optimize → matching → review → interview → write；
+  review 节点移植自 langgraph 版 graph.py（LLM 审核不达标回退重试 ≤3 次）；
+  `/api/optimize` 改调 `chain.run_optimize`，与 langgraph 版 StateGraph 流水线结构对齐。
+
+### 变更
+- **refactor** `langchain_version` 由「冻结参考版」转为**并行开发版**：基线同步 langgraph 版
+  （config 对齐 bge-small / HF 离线 / 爬虫扩展、resume_reader、content_optimizer 纯文本清洗、
+  validate_runtime、预热、doctor 命令、复制按钮、ingest 脚本、pytest 配置），
+  工作流约定为「改动先在 langgraph 版落地，随后同步到 langchain 版」。
+
+### 文档
+- **docs** 三份 README 与 `项目文件结构说明.md` 更新：langchain 版状态改为并行开发，
+  补充 schemas / retrievers / chain / SSE 流式等新模块说明。
+
+---
+
 ## 2026-08-14 — RAG 检索增强（标题索引 + Rerank 精排）
 
 ### 新增

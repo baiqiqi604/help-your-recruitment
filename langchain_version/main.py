@@ -40,7 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_web.add_argument("--port", type=int, default=cfg.WEB_CONFIG["port"], help="监听端口")
 
     # chat
-    sub.add_parser("chat", help="启动 CLI 对话")
+    p_chat = sub.add_parser("chat", help="启动 CLI 对话")
+    p_chat.add_argument(
+        "--session", default="", help="会话 ID（缺省用固定 cli，实现多轮记忆）"
+    )
+
+    # doctor
+    sub.add_parser("doctor", help="检查运行依赖、LLM 配置与岗位数据")
 
     # optimize
     p_opt = sub.add_parser("optimize", help="定制化简历优化，输出双 Word 文档")
@@ -66,14 +72,14 @@ def run_web(host: str, port: int) -> int:
     return 0
 
 
-def run_chat() -> int:
+def run_chat(session_id: str = "") -> int:
     """启动 CLI 对话（复用 Agent 会话记忆）。"""
     import agent
 
     print("=" * 56)
     print("简历优化 Agent 命令行对话（输入 exit / quit / 退出 结束）")
     print("=" * 56)
-    session_id = "cli"
+    session_id = session_id or "cli"
     while True:
         try:
             user_input = input("\n你: ").strip()
@@ -94,14 +100,39 @@ def run_chat() -> int:
     return 0
 
 
-def _read_resume_text(resume_path: str) -> str:
-    """按扩展名读取简历文本（.pdf/.docx/.txt）。"""
-    import resume_reader
+def run_doctor() -> int:
+    """检查运行依赖、LLM 配置与岗位数据（与 langgraph 版对齐）。"""
+    from validate_runtime import collect_diagnostics
 
-    suffix = Path(resume_path).suffix.lower()
+    report = collect_diagnostics()
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["ready"] else 1
+
+
+def _read_resume_text(resume_path: str) -> str:
+    """按扩展名读取简历文本（.pdf/.docx/.txt，与 langgraph 版一致）。"""
+    import tempfile
+
+    from resume_reader import pdf_to_docx, read_resume
+
+    path = Path(resume_path)
+    if not path.exists():
+        raise FileNotFoundError(f"简历文件不存在: {resume_path}")
+
+    suffix = path.suffix.lower()
     if suffix == ".txt":
-        return Path(resume_path).read_text(encoding="utf-8", errors="replace").strip()
-    return resume_reader.read_resume(resume_path).strip()
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+
+    temp_docx = path
+    if suffix == ".pdf":
+        temp_docx = Path(tempfile.gettempdir()) / f"{path.stem}_lc_temp.docx"
+        pdf_to_docx(str(path), str(temp_docx))
+    try:
+        data = read_resume(str(temp_docx))
+    finally:
+        if suffix == ".pdf" and temp_docx.exists():
+            temp_docx.unlink(missing_ok=True)
+    return data["full_text"].strip()
 
 
 def run_optimize(
@@ -209,7 +240,9 @@ def main() -> int:
     if args.command == "web":
         return run_web(args.host, args.port)
     if args.command == "chat":
-        return run_chat()
+        return run_chat(args.session)
+    if args.command == "doctor":
+        return run_doctor()
     if args.command == "optimize":
         return run_optimize(args.resume, args.jd, args.job_id, args.company, args.out)
     return 1

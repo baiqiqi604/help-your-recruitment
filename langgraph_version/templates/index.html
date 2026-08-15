@@ -521,20 +521,106 @@
       // 大模型思考中：先显示 loading 气泡
       const thinking = appendThinking();
 
+      // 流式回复气泡（延迟创建：收到首个 SSE 事件后替换 loading）
+      let streamDiv = null;
+      let bubble = null;
+      let body = null;
+      let tagEl = null;
+      let reply = "";
+      let source = "llm";
+      let questions = [];
+
+      function ensureStreamBubble() {
+        if (streamDiv) return;
+        removeThinking(thinking);
+        streamDiv = document.createElement("div");
+        streamDiv.className = "msg assistant";
+        bubble = document.createElement("div");
+        bubble.className = "bubble";
+        body = document.createElement("div");
+        bubble.appendChild(body);
+        streamDiv.appendChild(bubble);
+        chatBox.appendChild(streamDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+
       try {
-        const resp = await fetch("/api/chat", {
+        const resp = await fetch("/api/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: chatHistory, session_id: sessionId })
         });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || "请求失败");
-        const reply = data.reply || "（无回复）";
-        const source = data.source === "llm" ? "llm" : "rag";
+        if (!resp.ok) throw new Error("流式接口不可用");
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buffer.indexOf("\n\n")) >= 0) {
+            const raw = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const line = raw.trim();
+            if (!line.startsWith("data:")) continue;
+            let evt;
+            try { evt = JSON.parse(line.slice(5).trim()); } catch { continue; }
+            if (evt.event === "start") {
+              source = evt.source === "rag" ? "rag" : "llm";
+              ensureStreamBubble();
+              tagEl = document.createElement("div");
+              tagEl.className = "source-tag " + (source === "rag" ? "rag" : "llm");
+              tagEl.innerHTML = source === "rag"
+                ? '<i class="ti ti-book"></i> 来源：面经题库'
+                : '<i class="ti ti-robot"></i> 来源：大模型回答';
+              bubble.insertBefore(tagEl, bubble.firstChild);
+            } else if (evt.event === "delta") {
+              ensureStreamBubble();
+              reply += evt.text || "";
+              body.textContent = reply;
+              chatBox.scrollTop = chatBox.scrollHeight;
+            } else if (evt.event === "questions") {
+              questions = evt.questions || [];
+            }
+          }
+        }
+        if (!reply) reply = "（无回复）";
         chatHistory.push({ role: "assistant", content: reply });
-        appendMsg("assistant", reply, source, data.questions || []);
+        // RAG 命中：渲染相关面试题（可点击跳转题库详情）
+        if (streamDiv && source === "rag" && questions.length) {
+          const qsTitle = document.createElement("div");
+          qsTitle.style.cssText = "font-weight:600; margin-top:10px; margin-bottom:4px;";
+          qsTitle.innerHTML = '<i class="ti ti-pin"></i> 相关面试题（点击查看详情）';
+          bubble.appendChild(qsTitle);
+          questions.forEach(function (q, idx) {
+            const link = document.createElement("div");
+            link.className = "exp-jump-link";
+            link.textContent = (idx + 1) + ". " + (q.question || "（无题目）");
+            link.onclick = function () { jumpToExpQuestion(q, questions); };
+            bubble.appendChild(link);
+          });
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }
       } catch (err) {
-        appendMsg("assistant", "出错了：" + err.message);
+        // 流式失败 → 回退到原 JSON 接口
+        if (streamDiv) streamDiv.remove();
+        try {
+          const resp = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: chatHistory, session_id: sessionId })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || "请求失败");
+          reply = data.reply || "（无回复）";
+          source = data.source === "llm" ? "llm" : "rag";
+          questions = data.questions || [];
+          chatHistory.push({ role: "assistant", content: reply });
+          appendMsg("assistant", reply, source, questions);
+        } catch (err2) {
+          appendMsg("assistant", "出错了：" + err2.message);
+        }
       } finally {
         removeThinking(thinking);
         chatSendBtn.disabled = false;

@@ -19,6 +19,7 @@ import logging
 from typing import Any
 
 import llm_client
+from schemas import JDAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +114,13 @@ def analyze_jd(jd_text: str, resume_text: str = "") -> dict[str, Any]:
 
     prompt = JD_ANALYZE_PROMPT.format(jd_text=text, resume_block=resume_block)
     logger.info("调用 LLM 完整拆解岗位需求...")
-    result = llm_client.chat_json(prompt, mock_scenario="analyze_jd")
+    # PydanticOutputParser 结构化解析（解析失败自动降级为手写 JSON 解析）
+    parsed = llm_client.chat_structured(
+        prompt, model_cls=JDAnalysis, mock_scenario="analyze_jd"
+    )
+    raw = parsed.model_dump() if isinstance(parsed, JDAnalysis) else parsed
 
-    analysis = _normalize_analysis(result)
+    analysis = _normalize_analysis(raw)
     logger.info(
         "岗位拆解完成：必备 %d 项、加分 %d 项、分级 %d 条，岗位类型=%s",
         len(analysis["required_skills"]),

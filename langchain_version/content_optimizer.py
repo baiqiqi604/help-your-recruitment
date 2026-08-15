@@ -13,9 +13,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import llm_client
+from schemas import MatchingRowList
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,17 @@ OPTIMIZE_PROMPT = """你是一位专业的简历优化顾问，遵循以下定�
 工作经历
 项目经历
 教育背景
-证书 / 奖项 / 其他"""
+证书 / 奖项 / 其他
+
+【输出格式硬性要求】
+1. 纯文本格式，不要使用任何 Markdown / 富文本符号
+   （禁止出现 *、**、#、##、>、- 列表符、• 等）；
+2. 各部分标题单独占一行（如「个人摘要」「核心技能」），
+   标题行不加任何修饰符号；
+3. 条目之间用换行分段，不要用编号符号（1. 2. 3.），
+   不要用破折号开头，直接书写内容；
+4. 全文应可直接复制粘贴到 Word / 在线简历系统，
+   不得包含任何与内容无关的格式符号。"""
 
 
 def _format_tier_lines(tier_name: str, items: list[str]) -> str:
@@ -83,6 +95,35 @@ def _extract_tiers(jd_analysis: dict[str, Any]) -> dict[str, list[str]]:
         if tier in tiers and requirement:
             tiers[tier].append(requirement)
     return tiers
+
+
+def _clean_plain_text(text: str) -> str:
+    """去除 LLM 输出中的 Markdown / 列表符号，输出可直接复制粘贴的纯文本。
+
+    处理：
+    - 行首的 *、-、•、# 等列表/标题符号；
+    - 行内成对的 **加粗** / *斜体* 符号；
+    - 残留的孤立 * 字符；
+    - 折叠连续空行为单个空行。
+    保留正文中的连字符（如 3-5 年）、C++ 等合法内容。
+    """
+    if not text:
+        return text
+    cleaned_lines: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        # 行首列表符号 / 标题符号（* - • # > 及跟随空白）
+        s = re.sub(r"^[*#>\-\u2022\u00b7\s]+(?=\S)", "", s)
+        # 行内 **加粗** / *斜体* 装饰符号
+        s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
+        s = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", s)
+        # 移除残余孤立 *
+        s = s.replace("*", "")
+        if s:
+            cleaned_lines.append(s)
+        elif cleaned_lines and cleaned_lines[-1] != "":
+            cleaned_lines.append("")
+    return "\n".join(cleaned_lines).strip()
 
 
 def optimize_resume_content(resume_text: str, jd_analysis: dict[str, Any]) -> str:
@@ -128,6 +169,9 @@ def optimize_resume_content(resume_text: str, jd_analysis: dict[str, Any]) -> st
 
     if not optimized:
         raise ValueError("模型返回的优化结果为空")
+
+    # 兜底清理：去除模型输出的 markdown 符号，保证可直接复制粘贴
+    optimized = _clean_plain_text(optimized)
 
     logger.info("简历优化完成，输出 %d 字", len(optimized))
     return optimized
@@ -182,7 +226,14 @@ def build_matching_table(
 
     logger.info("调用 LLM 构建匹配关系表...")
     try:
-        raw_rows = llm_client.chat_json_array(prompt, mock_scenario="matching_table")
+        # PydanticOutputParser 结构化解析（解析失败自动降级为手写 JSON 数组解析）
+        parsed = llm_client.chat_structured(
+            prompt, model_cls=MatchingRowList, mock_scenario="matching_table"
+        )
+        if isinstance(parsed, MatchingRowList):
+            raw_rows = [row.model_dump() for row in parsed.root]
+        else:
+            raw_rows = parsed
         return _normalize_matching_rows(raw_rows)
     except ValueError as e:
         logger.warning("匹配关系表解析失败: %s", e)

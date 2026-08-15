@@ -11,11 +11,14 @@
 | 模块 | 说明 |
 |------|------|
 | 简历优化流水线 | LangGraph StateGraph 编排：加载简历 → 分析 JD → 公司分析 → 优化 → LLM 审核 → 面试建议 → 双文档输出 |
-| 对话 Agent | `langchain.agents.create_agent` + `MemorySaver`，按 session（thread_id）多轮记忆 |
+| 对话 Agent | `langchain.agents.create_agent` + `MemorySaver`，按 session（thread_id）多轮记忆；`astream_chat` 流式输出 |
 | 简历读取 | PDF → Word（pdf2docx）+ python-docx 提取段落/表格/全文 |
 | 格式输出 | 优化结果写回 Word 保留格式，可选导出 PDF（docx2pdf） |
 | 岗位知识库 | ChromaDB + BGE 中文 Embedding（`BGEEmbeddingFunction`），标题/技能短索引 + 语义检索/优质岗位 |
 | 面试题库（RAG） | ChromaDB `interview_kb` + `interview_kb_title` 双集合：标题索引 → 阈值过滤 → 关键词兜底 → **Rerank 精排** |
+| Retriever 抽象 | `retrievers.py`：检索链路包成 LangChain `BaseRetriever`，Agent 工具走 `retriever.invoke()` |
+| 结构化输出 | `schemas.py` + `llm_client.chat_structured`（PydanticOutputParser，解析失败自动降级手写解析） |
+| 流式对话 | `/api/chat/stream` SSE 打字机输出（`llm_client.stream_chat` / `agent.astream_chat`） |
 | 面经导入 | `_ingest_experiences.py` / `_ingest_ai_pm_bank.py` 等一次性导入脚本 |
 
 ## 项目结构
@@ -23,9 +26,11 @@
 ```
 langgraph_version/
 ├── config.py                 # 全局配置（LLM / Embedding / Rerank / 向量库 / 路径 / 爬虫）
-├── llm_client.py             # 多 Provider LLM 客户端（DeepSeek/OpenAI/通义/智谱）
+├── llm_client.py             # 多 Provider LLM 客户端（含 stream_chat / chat_structured）
+├── schemas.py                # 结构化输出 Pydantic 模型（JDAnalysis / MatchingRow）
+├── retrievers.py             # LangChain Retriever 抽象（InterviewKB / JDKB）
 ├── graph.py                  # ★ LangGraph StateGraph 优化流水线
-├── agent.py                  # ★ LangGraph 对话 Agent（MemorySaver 记忆）
+├── agent.py                  # ★ LangGraph 对话 Agent（MemorySaver 记忆 + astream_chat）
 ├── jd_analyzer.py            # 岗位分析（大模型提取结构化需求）
 ├── company_researcher.py     # 目标公司调研与求职判断
 ├── content_optimizer.py      # 简历优化 + 匹配关系表
@@ -37,13 +42,14 @@ langgraph_version/
 ├── reranker.py               # ★ Rerank 精排（bge-reranker-v2-m3，懒加载 + 优雅降级）
 ├── experience_crawler.py     # 面经抓取 / 手动素材保存
 ├── experience_processor.py   # 面经 LLM 结构化加工
-├── web_app.py                # FastAPI 服务
+├── web_app.py                # FastAPI 服务（含 /api/chat/stream SSE 流式）
 ├── main.py                   # CLI 入口（web / chat / optimize / doctor）
 ├── validate_runtime.py       # 运行环境依赖校验（main.py doctor）
-├── test_core_pipeline.py     # 核心流水线测试（unittest）
-├── tests/                    # pytest 套件（图流程 / Web API / LLM JSON 解析）
-├── templates/index.html      # 单页前端（聊天 + 优化，原生 JS/CSS，无 CDN）
+├── tests/                    # pytest 套件（图流程 / Web API / LLM JSON 解析 / 知识库）
+├── templates/index.html      # 单页前端（聊天打字机 + 优化，原生 JS/CSS，无 CDN）
 ├── requirements.txt
+├── requirements-dev.txt
+├── pytest.ini
 ├── .env.example
 └── docs/
     ├── PRD.md

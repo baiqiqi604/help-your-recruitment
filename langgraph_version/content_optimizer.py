@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 import llm_client
+from schemas import MatchingRowList
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,14 @@ def build_matching_table(
 
     logger.info("调用 LLM 构建匹配关系表...")
     try:
-        raw_rows = llm_client.chat_json_array(prompt, mock_scenario="matching_table")
+        # PydanticOutputParser 结构化解析（解析失败自动降级为手写 JSON 数组解析）
+        parsed = llm_client.chat_structured(
+            prompt, model_cls=MatchingRowList, mock_scenario="matching_table"
+        )
+        if isinstance(parsed, MatchingRowList):
+            raw_rows = [row.model_dump() for row in parsed.root]
+        else:
+            raw_rows = parsed
         return _normalize_matching_rows(raw_rows)
     except ValueError as e:
         logger.warning("匹配关系表解析失败: %s", e)

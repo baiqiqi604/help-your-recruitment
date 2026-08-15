@@ -204,6 +204,111 @@ def chat(request: ChatRequest) -> dict[str, Any]:
     return {"reply": answer, "source": "llm", "questions": [], "session_id": session_id}
 
 
+# ──────────────────────────────────────────────
+# 对话接口（SSE 流式）
+# ──────────────────────────────────────────────
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """SSE 流式对话接口（打字机效果，RAG 优先分流与 /api/chat 一致）。
+
+    SSE 事件格式（text/event-stream）：
+        data: {"event": "start", "source": "rag"|"llm"}
+        data: {"event": "delta", "text": "..."}        （逐块文本）
+        data: {"event": "questions", "questions": [...]}（RAG 命中时附题目）
+        data: {"event": "done"}
+
+    流程：
+        1. 先检索面经题库（interview_kb，命中判定与 /api/chat 一致）；
+        2. 命中 → LLM 基于命中的面经内容流式总结回答（source=rag）；
+        3. 未命中 → 大模型直接流式回答（source=llm）。
+    """
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    session_id = request.session_id.strip() or f"session-{uuid.uuid4().hex[:12]}"
+
+    user_input = ""
+    for msg in reversed(request.messages):
+        if msg.get("role") == "user" and (msg.get("content") or "").strip():
+            user_input = msg["content"]
+            break
+
+    if not user_input:
+        raise HTTPException(status_code=400, detail="缺少用户消息内容")
+
+    logger.info("/api/chat/stream：session=%s 收到输入 %d 字", session_id, len(user_input))
+
+    from interview_knowledge_base import search_questions
+
+    try:
+        hits = search_questions(user_input, top_k=8, max_distance=0.45)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("面经检索失败，回退到模型回答")
+        hits = []
+
+    def sse(payload: dict) -> str:
+        return "data: " + _json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+    async def gen():
+        import llm_client
+
+        yield sse({"event": "start", "source": "rag" if hits else "llm"})
+
+        if hits:
+            # ── RAG 命中：LLM 基于面经内容流式总结回答 ──
+            kb_text = ""
+            for i, q in enumerate(hits[:4], start=1):
+                kb_text += f"{i}. 题目：{q.get('question', '')}\n"
+                key_points = q.get("key_points") or []
+                if key_points:
+                    kb_text += f"   考察点：{'、'.join(key_points)}\n"
+                if q.get("reference_answer"):
+                    ans = str(q["reference_answer"])
+                    if len(ans) > 600:
+                        ans = ans[:600] + "…（已截断）"
+                    kb_text += f"   参考答案：{ans}\n"
+
+            system = (
+                "你是求职面试答疑助手。请基于下方提供的「面经题库内容」，用通俗清晰的语言"
+                "总结回答用户的问题，输出一段连贯的答案：不要逐条罗列题目，不要提“题库”字样，"
+                "也不要输出面试题列表。内容必须来源于题库材料，不要编造；材料未覆盖的部分明确说明。"
+            )
+            prompt = f"用户问题：{user_input}\n\n【面经题库内容】\n{kb_text}"
+            try:
+                for delta in llm_client.stream_chat(prompt, system, max_tokens=1500):
+                    if delta:
+                        yield sse({"event": "delta", "text": delta})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("流式总结失败，回退直接整理: %s", e)
+                yield sse({"event": "delta", "text": _format_kb_reply(user_input, hits)})
+            yield sse({"event": "questions", "questions": hits})
+        else:
+            # ── 未命中：大模型直接流式回答并标注 ──
+            try:
+                first = True
+                for delta in llm_client.stream_chat(user_input):
+                    if not delta:
+                        continue
+                    if first:
+                        yield sse({"event": "delta", "text": "【本题库暂无收录，以下为模型回答】\n\n"})
+                        first = False
+                    yield sse({"event": "delta", "text": delta})
+                if first:  # 一个字符都没产出
+                    yield sse({"event": "delta", "text": "（模型无输出）"})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("流式回答失败: %s", e)
+                yield sse({"event": "delta", "text": f"（回答失败：{e}）"})
+
+        yield sse({"event": "done"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def _summarize_kb_answer(user_input: str, questions: list[dict[str, Any]]) -> str:
     """让 LLM 基于命中的面经内容总结成连贯答案（相关面试题由前端渲染可点击列表）。
 

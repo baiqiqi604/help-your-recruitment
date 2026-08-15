@@ -41,10 +41,12 @@ def answer_from_kb(question: str, top_k: int = 5) -> list[dict[str, Any]]:
     用于回答用户提出的面试/求职/技术类问题：先查题库看是否已有收录，
     命中则返回题目、参考答案、考察点，供整理回答与推荐相关题目。
     """
-    from interview_knowledge_base import search_questions
+    from retrievers import get_interview_retriever
 
     try:
-        return search_questions(question, top_k=top_k, max_distance=0.6)
+        # 通过 LangChain Retriever 抽象检索（内部仍是标题索引→阈值→关键词→Rerank 链路）
+        docs = get_interview_retriever(top_k=top_k, max_distance=0.6).invoke(question)
+        return [dict(d.metadata) for d in docs]
     except Exception as e:  # noqa: BLE001
         logger.warning("answer_from_kb 检索失败: %s", e)
         return []
@@ -204,6 +206,44 @@ def chat_with_agent(user_input: str, session_id: str) -> str:
     if not reply.strip():
         return "（Agent 没有返回内容，请稍后再试）"
     return reply
+
+
+async def astream_chat(user_input: str, session_id: str):
+    """Agent 流式对话：逐块产出回复文本（async generator，SSE 用）。
+
+    通过 langgraph agent 的 astream_events 监听模型流式事件
+    （on_chat_model_stream），工具调用/中间推理不对外输出，
+    只产出最终回复的文本增量。
+
+    Yields:
+        文本增量片段（str）
+    """
+    if not user_input or not user_input.strip():
+        yield "（请输入内容后再发送）"
+        return
+
+    import llm_client
+
+    if llm_client.mock_enabled():
+        logger.info("[MOCK] 流式对话：返回模拟回复")
+        reply = llm_client.chat(user_input)
+        for i in range(0, len(reply), 12):
+            yield reply[i : i + 12]
+        return
+
+    agent = get_agent()
+    config = {"configurable": {"thread_id": session_id or "default"}}
+    logger.info("astream_chat：session=%s 收到输入 %d 字", session_id, len(user_input))
+
+    async for event in agent.astream_events(
+        {"messages": [{"role": "user", "content": user_input.strip()}]},
+        config=config,
+        version="v2",
+    ):
+        if event["event"] == "on_chat_model_stream":
+            chunk = event["data"]["chunk"]
+            if chunk and chunk.content:
+                yield chunk.content
 
 
 if __name__ == "__main__":

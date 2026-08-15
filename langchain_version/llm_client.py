@@ -386,6 +386,45 @@ def chat(
     return response.content
 
 
+def stream_chat(
+    prompt: str,
+    system: str | None = None,
+    max_tokens: int | None = None,
+    mock_scenario: str | None = None,
+) -> Any:
+    """发送单轮对话请求，逐块产出文本（生成器，供 SSE 流式输出）。
+
+    MOCK 模式下按固定长度切块模拟流式（保持测试确定性）；
+    真实模式下走 ChatOpenAI.stream() 逐 token 产出。
+
+    Args:
+        prompt: 用户输入
+        system: 系统提示词（可选）
+        max_tokens: 可选覆盖输出上限
+        mock_scenario: MOCK 模式下的显式场景名
+
+    Yields:
+        文本增量片段（str）
+    """
+    if mock_enabled():
+        text = _mock_chat(prompt, system, mock_scenario)
+        for i in range(0, len(text), 12):  # 每块 12 字符，模拟打字机
+            yield text[i : i + 12]
+        return
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    llm = get_llm() if max_tokens is None else _make_llm(max_tokens=max_tokens)
+    messages = []
+    if system:
+        messages.append(SystemMessage(content=system))
+    messages.append(HumanMessage(content=prompt))
+
+    for chunk in llm.stream(messages):
+        if chunk.content:
+            yield chunk.content
+
+
 def chat_json(
     prompt: str,
     system: str | None = None,
@@ -404,6 +443,43 @@ def chat_json_array(
     """发送对话请求并解析返回的 JSON 数组。"""
     raw = chat(prompt, system, mock_scenario=mock_scenario)
     return parse_llm_json_array(raw)
+
+
+def chat_structured(
+    prompt: str,
+    system: str | None = None,
+    model_cls: type | None = None,
+    mock_scenario: str | None = None,
+) -> Any:
+    """发送对话请求并用 PydanticOutputParser 解析为结构化模型。
+
+    Args:
+        prompt: 用户输入（prompt 模板已内置字段说明，不追加 format instructions）
+        system: 系统提示词（可选）
+        model_cls: Pydantic 模型类（BaseModel 或 RootModel[list[...]]）；
+            为 None 时降级为 parse_llm_json（dict）
+        mock_scenario: MOCK 模式下的显式场景名
+
+    Returns:
+        解析成功返回模型实例；解析失败降级返回 dict / list（与旧路径一致），
+        保证 MOCK 与不稳定输出下行为不回退。
+    """
+    raw = chat(prompt, system, mock_scenario=mock_scenario)
+    if model_cls is None:
+        return parse_llm_json(raw)
+
+    try:
+        from langchain_core.output_parsers import PydanticOutputParser
+
+        parser = PydanticOutputParser(pydantic_object=model_cls)
+        return parser.invoke(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("结构化解析失败，降级手写解析: %s", e)
+        import pydantic
+
+        if isinstance(model_cls, type) and issubclass(model_cls, pydantic.RootModel):
+            return parse_llm_json_array(raw)
+        return parse_llm_json(raw)
 
 
 def parse_llm_json(response_text: str) -> dict[str, Any]:

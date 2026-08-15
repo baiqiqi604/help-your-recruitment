@@ -140,6 +140,19 @@
     }
 
     /* ── 表单 ── */
+    .label-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px; gap: 10px;
+    }
+    .label-row label { margin-bottom: 0; }
+    .btn-mini {
+      border: 1px solid var(--border); background: #fff; color: var(--primary);
+      padding: 4px 12px; border-radius: 8px; cursor: pointer;
+      font-size: 12px; font-weight: 500; white-space: nowrap;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .btn-mini:hover { background: var(--primary-light); border-color: #5eead4; }
+    .btn-mini.copied { background: #ccfbf1; border-color: #5eead4; color: #0f766e; }
     .form-row { margin-bottom: 16px; }
     label {
       display: block; font-size: 13px; font-weight: 500;
@@ -348,8 +361,13 @@
       </div>
 
       <div class="form-row">
-        <label>优化后简历（可直接复制编辑）</label>
-        <textarea id="optimized-text" rows="16" readonly></textarea>
+        <div class="label-row">
+          <label>优化后简历（可直接复制粘贴）</label>
+          <button type="button" class="btn-mini" id="copy-optimized-btn" onclick="copyOptimized()">
+            <i class="ti ti-copy"></i> 复制全文
+          </button>
+        </div>
+        <textarea id="optimized-text" rows="18" readonly></textarea>
       </div>
 
       <div class="form-row">
@@ -503,20 +521,106 @@
       // 大模型思考中：先显示 loading 气泡
       const thinking = appendThinking();
 
+      // 流式回复气泡（延迟创建：收到首个 SSE 事件后替换 loading）
+      let streamDiv = null;
+      let bubble = null;
+      let body = null;
+      let tagEl = null;
+      let reply = "";
+      let source = "llm";
+      let questions = [];
+
+      function ensureStreamBubble() {
+        if (streamDiv) return;
+        removeThinking(thinking);
+        streamDiv = document.createElement("div");
+        streamDiv.className = "msg assistant";
+        bubble = document.createElement("div");
+        bubble.className = "bubble";
+        body = document.createElement("div");
+        bubble.appendChild(body);
+        streamDiv.appendChild(bubble);
+        chatBox.appendChild(streamDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+
       try {
-        const resp = await fetch("/api/chat", {
+        const resp = await fetch("/api/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: chatHistory, session_id: sessionId })
         });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || "请求失败");
-        const reply = data.reply || "（无回复）";
-        const source = data.source === "llm" ? "llm" : "rag";
+        if (!resp.ok) throw new Error("流式接口不可用");
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buffer.indexOf("\n\n")) >= 0) {
+            const raw = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const line = raw.trim();
+            if (!line.startsWith("data:")) continue;
+            let evt;
+            try { evt = JSON.parse(line.slice(5).trim()); } catch { continue; }
+            if (evt.event === "start") {
+              source = evt.source === "rag" ? "rag" : "llm";
+              ensureStreamBubble();
+              tagEl = document.createElement("div");
+              tagEl.className = "source-tag " + (source === "rag" ? "rag" : "llm");
+              tagEl.innerHTML = source === "rag"
+                ? '<i class="ti ti-book"></i> 来源：面经题库'
+                : '<i class="ti ti-robot"></i> 来源：大模型回答';
+              bubble.insertBefore(tagEl, bubble.firstChild);
+            } else if (evt.event === "delta") {
+              ensureStreamBubble();
+              reply += evt.text || "";
+              body.textContent = reply;
+              chatBox.scrollTop = chatBox.scrollHeight;
+            } else if (evt.event === "questions") {
+              questions = evt.questions || [];
+            }
+          }
+        }
+        if (!reply) reply = "（无回复）";
         chatHistory.push({ role: "assistant", content: reply });
-        appendMsg("assistant", reply, source, data.questions || []);
+        // RAG 命中：渲染相关面试题（可点击跳转题库详情）
+        if (streamDiv && source === "rag" && questions.length) {
+          const qsTitle = document.createElement("div");
+          qsTitle.style.cssText = "font-weight:600; margin-top:10px; margin-bottom:4px;";
+          qsTitle.innerHTML = '<i class="ti ti-pin"></i> 相关面试题（点击查看详情）';
+          bubble.appendChild(qsTitle);
+          questions.forEach(function (q, idx) {
+            const link = document.createElement("div");
+            link.className = "exp-jump-link";
+            link.textContent = (idx + 1) + ". " + (q.question || "（无题目）");
+            link.onclick = function () { jumpToExpQuestion(q, questions); };
+            bubble.appendChild(link);
+          });
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }
       } catch (err) {
-        appendMsg("assistant", "出错了：" + err.message);
+        // 流式失败 → 回退到原 JSON 接口
+        if (streamDiv) streamDiv.remove();
+        try {
+          const resp = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: chatHistory, session_id: sessionId })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || "请求失败");
+          reply = data.reply || "（无回复）";
+          source = data.source === "llm" ? "llm" : "rag";
+          questions = data.questions || [];
+          chatHistory.push({ role: "assistant", content: reply });
+          appendMsg("assistant", reply, source, questions);
+        } catch (err2) {
+          appendMsg("assistant", "出错了：" + err2.message);
+        }
       } finally {
         removeThinking(thinking);
         chatSendBtn.disabled = false;
@@ -887,6 +991,26 @@
         });
         tbody.appendChild(tr);
       });
+    }
+
+    function copyOptimized() {
+      const box = document.getElementById("optimized-text");
+      const btn = document.getElementById("copy-optimized-btn");
+      if (!box || !box.value) { setStatus("error", "还没有优化结果可复制"); return; }
+      const done = () => {
+        btn.classList.add("copied");
+        const oldHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="ti ti-check"></i> 已复制';
+        setTimeout(() => { btn.classList.remove("copied"); btn.innerHTML = oldHtml; }, 1500);
+      };
+      // 优先使用剪贴板 API（异步），失败则回退到 select + execCommand
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(box.value).then(done).catch(() => {
+          box.select(); document.execCommand("copy"); done();
+        });
+      } else {
+        box.select(); document.execCommand("copy"); done();
+      }
     }
 
     // 启动时显示欢迎语

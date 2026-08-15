@@ -26,7 +26,10 @@ import logging
 import os
 import re
 import tempfile
+import threading
+import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -42,9 +45,46 @@ from config import LLM_CONFIG, PATH_CONFIG
 
 logger = logging.getLogger(__name__)
 
+
+def _warmup() -> None:
+    """启动预热：预加载 embedding 模型 + 完成一次 LLM 冷启动调用（与 langgraph 版对齐）。
+
+    冷启动成本实测：embedding 模型约 25s（一次性），LLM 首次调用 24-46s
+    （连接复用后降至 ~0.6s）。预热把这些开销移到服务启动阶段，
+    避免用户首次检索/对话/简历优化被冷启动拖慢。
+    """
+    t0 = time.time()
+    # 1) embedding 模型：预加载，之后检索不再等加载
+    try:
+        from jd_knowledge_base import _get_embedding_function
+
+        _get_embedding_function()
+        logger.info("预热：embedding 模型加载完成（%.1fs）", time.time() - t0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("预热：embedding 模型加载失败（将按需加载）: %s", e)
+
+    # 2) LLM：首次调用建立连接（MOCK 模式跳过）
+    try:
+        import llm_client
+
+        if not llm_client.mock_enabled():
+            llm_client.chat("请只回复两个字：就绪", max_tokens=10)
+            logger.info("预热：LLM 首次调用完成（累计 %.1fs）", time.time() - t0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("预热：LLM 首次调用失败（将按需重试）: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：启动时后台预热，退出时无需特殊清理。"""
+    threading.Thread(target=_warmup, name="warmup", daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="简历优化 Agent（LangChain 版）— 定制化简历大师",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # 静态资源（Tabler Icons 等本地化文件），目录不存在时跳过挂载
@@ -177,6 +217,106 @@ def chat(req: ChatRequest) -> dict[str, Any]:
     return {"reply": answer, "source": "llm", "questions": [], "session_id": session_id}
 
 
+# ──────────────────────────────────────────────
+# 智能对话（SSE 流式，与 langgraph 版对齐）
+# ──────────────────────────────────────────────
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """SSE 流式对话接口（打字机效果，RAG 优先分流与 /api/chat 一致）。
+
+    SSE 事件格式（text/event-stream）：
+        data: {"event": "start", "source": "rag"|"llm"}
+        data: {"event": "delta", "text": "..."}        （逐块文本）
+        data: {"event": "questions", "questions": [...]}（RAG 命中时附题目）
+        data: {"event": "done"}
+    """
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    session_id = req.session_id.strip() or f"session-{uuid.uuid4().hex[:12]}"
+
+    user_input = ""
+    for msg in reversed(req.messages):
+        if msg.get("role") == "user" and (msg.get("content") or "").strip():
+            user_input = msg["content"]
+            break
+
+    if not user_input:
+        raise HTTPException(status_code=400, detail="缺少用户消息内容")
+
+    logger.info("/api/chat/stream：session=%s 收到输入 %d 字", session_id, len(user_input))
+
+    from interview_knowledge_base import search_questions
+
+    try:
+        hits = search_questions(user_input, top_k=8, max_distance=0.45)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("面经检索失败，回退到模型回答")
+        hits = []
+
+    def sse(payload: dict) -> str:
+        return "data: " + _json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+    async def gen():
+        import llm_client
+
+        yield sse({"event": "start", "source": "rag" if hits else "llm"})
+
+        if hits:
+            # ── RAG 命中：LLM 基于面经内容流式总结回答 ──
+            kb_text = ""
+            for i, q in enumerate(hits[:4], start=1):
+                kb_text += f"{i}. 题目：{q.get('question', '')}\n"
+                key_points = q.get("key_points") or []
+                if key_points:
+                    kb_text += f"   考察点：{'、'.join(key_points)}\n"
+                if q.get("reference_answer"):
+                    ans = str(q["reference_answer"])
+                    if len(ans) > 600:
+                        ans = ans[:600] + "…（已截断）"
+                    kb_text += f"   参考答案：{ans}\n"
+
+            system = (
+                "你是求职面试答疑助手。请基于下方提供的「面经题库内容」，用通俗清晰的语言"
+                "总结回答用户的问题，输出一段连贯的答案：不要逐条罗列题目，不要提“题库”字样，"
+                "也不要输出面试题列表。内容必须来源于题库材料，不要编造；材料未覆盖的部分明确说明。"
+            )
+            prompt = f"用户问题：{user_input}\n\n【面经题库内容】\n{kb_text}"
+            try:
+                for delta in llm_client.stream_chat(prompt, system, max_tokens=1500):
+                    if delta:
+                        yield sse({"event": "delta", "text": delta})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("流式总结失败，回退直接整理: %s", e)
+                yield sse({"event": "delta", "text": _format_kb_reply(user_input, hits)})
+            yield sse({"event": "questions", "questions": hits})
+        else:
+            # ── 未命中：大模型直接流式回答并标注 ──
+            try:
+                first = True
+                for delta in llm_client.stream_chat(user_input):
+                    if not delta:
+                        continue
+                    if first:
+                        yield sse({"event": "delta", "text": "【本题库暂无收录，以下为模型回答】\n\n"})
+                        first = False
+                    yield sse({"event": "delta", "text": delta})
+                if first:  # 一个字符都没产出
+                    yield sse({"event": "delta", "text": "（模型无输出）"})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("流式回答失败: %s", e)
+                yield sse({"event": "delta", "text": f"（回答失败：{e}）"})
+
+        yield sse({"event": "done"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def _summarize_kb_answer(user_input: str, questions: list[dict[str, Any]]) -> str:
     """让 LLM 基于命中的面经内容总结成连贯答案（相关面试题由前端渲染可点击列表）。
 
@@ -242,7 +382,7 @@ def _sanitize_filename(name: str) -> str:
 
 @app.post("/api/optimize")
 def optimize(req: OptimizeRequest) -> dict[str, Any]:
-    """定制化简历优化：拆解岗位 → 公司分析 → 优化 → 面试建议 → 双 Word 文档。"""
+    """定制化简历优化：LCEL 管道（拆解岗位 → 公司分析 → 优化 → 匹配表 → 审核 → 面试建议 → 双 Word 文档）。"""
     resume_text = req.resume_text.strip()
     if not resume_text:
         raise HTTPException(status_code=400, detail="resume_text 不能为空")
@@ -266,60 +406,28 @@ def optimize(req: OptimizeRequest) -> dict[str, Any]:
     logger.info("定制优化开始（resume=%d 字, jd=%d 字, 公司=%s）", len(resume_text), len(jd_text), target_company)
 
     try:
-        # 1. 拆解岗位（含分级/类型/隐含目标/风险项）
-        jd_analysis = jd_analyzer.analyze_jd(jd_text, resume_text=resume_text)
+        # LCEL 管道：load → analyze → research → optimize → matching → review → interview → write
+        from chain import run_optimize
 
-        # 2. 公司分析与求职判断
-        from company_researcher import research_company
-
-        company_research = research_company(target_company, jd_analysis, resume_text)
-
-        # 3. 定制化简历优化 + 四级匹配表
-        optimized = content_optimizer.optimize_resume_content(resume_text, jd_analysis)
-        matching_table = content_optimizer.build_matching_table(resume_text, jd_analysis)
-
-        # 4. 面试问题 + 面试建议
-        from interview_advisor import build_interview_advice, generate_interview_questions
-
-        role_type = jd_analysis.get("role_type", "tech")
-        questions = generate_interview_questions(role_type, jd_analysis, resume_text)
-        advice = build_interview_advice(
-            target_company, jd_analysis, resume_text, company_research, questions
-        )
+        result = run_optimize(resume_text, jd_text, target_company=target_company)
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
         logger.exception("/api/optimize failed")
         raise HTTPException(status_code=500, detail=f"定制优化失败: {e}") from e
 
-    # 5. 生成双 Word 文档
-    from resume_writer import write_customized_resume, write_interview_advice_docx
-
-    out_dir = Path(PATH_CONFIG["output_dir"])
-    out_dir.mkdir(parents=True, exist_ok=True)
-    company_tag = _sanitize_filename(target_company)
-    role_tag = _sanitize_filename(jd_analysis.get("role_position", "") or "目标岗位")
-
-    resume_docx = ""
-    advice_docx = ""
-    try:
-        resume_docx = write_customized_resume(optimized, str(out_dir / f"定制化简历_{company_tag}_{role_tag}.docx"))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("定制化简历文档生成失败: %s", e)
-    try:
-        advice_docx = write_interview_advice_docx(advice, str(out_dir / f"面试建议_{company_tag}_{role_tag}.docx"))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("面试建议文档生成失败: %s", e)
+    if result.get("error"):
+        raise HTTPException(status_code=422, detail=result["error"])
 
     return {
-        "optimized": optimized,
-        "matching_table": matching_table,
-        "jd_analysis": jd_analysis,
-        "company_research": company_research,
-        "interview_questions": questions,
-        "interview_advice": advice,
-        "resume_docx": Path(resume_docx).name if resume_docx else "",
-        "advice_docx": Path(advice_docx).name if advice_docx else "",
+        "optimized": result.get("optimized_text", ""),
+        "matching_table": result.get("matching_table", []),
+        "jd_analysis": result.get("jd_analysis", {}),
+        "company_research": result.get("company_research", {}),
+        "interview_questions": result.get("interview_questions", []),
+        "interview_advice": result.get("interview_advice", ""),
+        "resume_docx": Path(result.get("resume_docx_path", "")).name if result.get("resume_docx_path") else "",
+        "advice_docx": Path(result.get("advice_docx_path", "")).name if result.get("advice_docx_path") else "",
     }
 
 
