@@ -30,6 +30,19 @@ except ImportError:
     pass
 
 # ──────────────────────────────────────────────
+# 模型离线加载兜底（任何启动入口生效）
+# 说明：embedding / rerank 模型均本地缓存，必须离线加载；
+# 网络受限时 HF 的 HEAD 联网检查会重试 5 次 × 超时（实测每次 20s+），
+# 导致启动/首次检索被卡数分钟。这里 setdefault 兜底——
+# start_server.bat / start_web_offline.py 已显式设置的值优先级更高；
+# 直接 `python web_app.py` 直启等路径也自动生效。
+# ──────────────────────────────────────────────
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+# ──────────────────────────────────────────────
 # 多 Provider LLM 配置
 # 统一走 OpenAI 兼容接口（ChatOpenAI）
 # ──────────────────────────────────────────────
