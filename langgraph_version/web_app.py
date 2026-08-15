@@ -18,7 +18,10 @@ import importlib.util
 import logging
 import os
 import tempfile
+import threading
+import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +39,50 @@ from config import LLM_CONFIG, PATH_CONFIG
 
 logger = logging.getLogger(__name__)
 
+
+def _warmup() -> None:
+    """启动预热：预加载 embedding 模型 + 完成一次 LLM 冷启动调用。
+
+    冷启动成本实测：embedding 模型约 25s（一次性），LLM 首次调用 24-46s
+    （连接复用后降至 ~0.6s）。预热把这些开销移到服务启动阶段，
+    避免用户首次检索/对话/简历优化被冷启动拖慢。
+
+    预热在后台线程执行，失败仅记日志，不影响服务启动；
+    调用方（检索/对话）本身都有按需加载与降级逻辑。
+    """
+    t0 = time.time()
+    # 1) embedding 模型：预加载，之后检索不再等加载
+    try:
+        from jd_knowledge_base import _get_embedding_function
+
+        _get_embedding_function()
+        logger.info("预热：embedding 模型加载完成（%.1fs）", time.time() - t0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("预热：embedding 模型加载失败（将按需加载）: %s", e)
+
+    # 2) LLM：首次调用建立连接（MOCK 模式跳过）
+    try:
+        import llm_client
+
+        if not llm_client.mock_enabled():
+            llm_client.chat("请只回复两个字：就绪", max_tokens=10)
+            logger.info("预热：LLM 首次调用完成（累计 %.1fs）", time.time() - t0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("预热：LLM 首次调用失败（将按需重试）: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：启动时后台预热，退出时无需特殊清理。"""
+    threading.Thread(target=_warmup, name="warmup", daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="简历优化 Agent（LangGraph 版）",
     description="基于 LangGraph 的简历优化 Agent：Chat 对话 + 简历优化 + 岗位知识库检索",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # 静态资源（Tabler Icons 等本地化文件），目录不存在时跳过挂载；
