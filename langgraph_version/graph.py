@@ -16,8 +16,8 @@ LangGraph 简历定制流水线（图编排核心，依据《定制化简历大�
 
 条件边：
     review 判 pass              → interview → write_output → END
-    review 判 fail 且 attempts<3 → 回到 optimize（attempts+1）
-    review 判 fail 且 attempts>=3 → END（重试超限）
+    review 判 fail 且 attempts<3 → optimize（回到 optimize，attempts+1）
+    review 判 fail 且 attempts>=3 → interview → write_output → END（超限仍必产出结果）
 
 默认交付物（SKILL）：
     定制化简历_公司名_岗位名.docx
@@ -91,6 +91,9 @@ class OptimizeState(TypedDict, total=False):
     interview_questions: list[dict[str, str]]
     interview_advice: str
     resume_docx_path: str
+    resume_html_path: str          # HTML 简历路径（resume-formatter Skill 产出）
+    resume_yaml_path: str          # 结构化 YAML 数据路径
+    resume_check_report: str       # 简历质量检查报告（Markdown）
     advice_docx_path: str
     error: str
     attempts: int
@@ -292,29 +295,67 @@ def _sanitize_filename(name: str) -> str:
 
 
 def write_output(state: OptimizeState) -> dict[str, Any]:
-    """节点：生成定制化简历与面试建议 Word 文档。"""
+    """节点：生成定制化简历（Word + HTML + YAML）与面试建议 Word 文档。
+
+    新增产出（对应《resume-formatter》Skill）：
+    - resume_html_path：精美 HTML 简历（浏览器打开 Ctrl+P 可导出 PDF）
+    - resume_yaml_path：结构化数据 YAML（便于后续迭代修改）
+    - resume_check_report：简历质量检查清单报告（Markdown）
+    """
     from config import PATH_CONFIG
-    from resume_writer import write_customized_resume, write_interview_advice_docx
+    from resume_writer import (
+        write_customized_resume,
+        write_customized_resume_html,
+        write_interview_advice_docx,
+    )
 
     target_company = _sanitize_filename(state.get("target_company", "") or "未知公司")
     role_position = _sanitize_filename((state.get("jd_analysis") or {}).get("role_position", "") or "目标岗位")
+
+    # 模板风格：统一使用 classic（匹配用户提供的 PDF 简历版式）
+    # 如需按岗位类型切换，可在此处恢复 product→modern / tech→tech 等逻辑
+    default_template = "classic"
 
     out_dir = Path(PATH_CONFIG["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
     resume_docx_path = ""
+    resume_html_path = ""
+    resume_yaml_path = ""
+    resume_check_report = ""
     advice_docx_path = ""
     error = ""
 
     optimized_text = (state.get("optimized_text") or "").strip()
     if optimized_text:
+        # 1) 原 Word 输出
         try:
             resume_docx_path = write_customized_resume(
                 optimized_text, str(out_dir / f"定制化简历_{target_company}_{role_position}.docx")
             )
         except Exception as e:  # noqa: BLE001
-            logger.warning("定制化简历文档生成失败: %s", e)
-            error = f"定制化简历文档生成失败: {e}"
+            logger.warning("定制化简历 Word 生成失败: %s", e)
+            error = f"定制化简历 Word 生成失败: {e}"
+
+        # 2) 新增 HTML + YAML + 检查报告（《resume-formatter》Skill）
+        #    同时输出一页 A4 精美 Word 简历（共用同一次结构化解析）
+        try:
+            html_out = write_customized_resume_html(
+                optimized_text,
+                output_html=str(out_dir / f"定制化简历_{target_company}_{role_position}_{default_template}.html"),
+                output_yaml=str(out_dir / f"定制化简历_{target_company}_{role_position}_data.yaml"),
+                template=default_template,
+                output_docx=str(out_dir / f"定制化简历_{target_company}_{role_position}_{default_template}.docx"),
+            )
+            resume_html_path = html_out["html_path"]
+            resume_yaml_path = html_out["yaml_path"]
+            resume_check_report = html_out["check_report"]
+            # 精美 Word 简历：优先于纯文本 Word（resume_formatter 产物更精美且一页 A4）
+            if html_out.get("docx_path"):
+                resume_docx_path = html_out["docx_path"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("HTML 简历生成失败: %s", e)
+            error = (error + "；" if error else "") + f"HTML 简历生成失败: {e}"
 
     advice_text = (state.get("interview_advice") or "").strip()
     if advice_text:
@@ -327,11 +368,20 @@ def write_output(state: OptimizeState) -> dict[str, Any]:
             error = (error + "；" if error else "") + f"面试建议文档生成失败: {e}"
 
     logger.info(
-        "write_output：简历文档=%s，面试建议文档=%s",
+        "write_output：Word=%s，HTML=%s，YAML=%s，面试建议=%s",
         resume_docx_path or "（未生成）",
+        resume_html_path or "（未生成）",
+        resume_yaml_path or "（未生成）",
         advice_docx_path or "（未生成）",
     )
-    return {"resume_docx_path": resume_docx_path, "advice_docx_path": advice_docx_path, "error": error}
+    return {
+        "resume_docx_path": resume_docx_path,
+        "resume_html_path": resume_html_path,
+        "resume_yaml_path": resume_yaml_path,
+        "resume_check_report": resume_check_report,
+        "advice_docx_path": advice_docx_path,
+        "error": error,
+    }
 
 
 def route_after_stage(state: OptimizeState) -> str:
@@ -349,7 +399,7 @@ def route_after_review(state: OptimizeState) -> str:
     """review 后的条件边：
     - pass                → interview（生成面试建议）
     - fail 且 attempts<3  → optimize（重试）
-    - fail 且 attempts>=3 → END（重试超限）
+    - fail 且 attempts>=3 → interview（重试超限，仍产出面试建议 + 文档，不给用户留空）
     """
     verdict = state.get("review_verdict") or {"pass": False}
     if verdict.get("pass"):
@@ -358,8 +408,8 @@ def route_after_review(state: OptimizeState) -> str:
     if (state.get("attempts") or 0) < MAX_ATTEMPTS:
         logger.info("条件边：审核未达标，第 %d 次重试 → optimize", state.get("attempts", 0))
         return "optimize"
-    logger.warning("条件边：重试超限（%d 次），结束", MAX_ATTEMPTS)
-    return END
+    logger.warning("条件边：重试超限（%d 次），仍进入 interview + write_output，确保用户拿到结果", MAX_ATTEMPTS)
+    return "interview"
 
 
 # ──────────────────────────────────────────────
@@ -413,11 +463,14 @@ def build_graph():
         {"continue": "review", END: END},
     )
 
-    # 条件边：review → (interview | optimize | END)
+    # 条件边：review → (interview | optimize)
+    #   pass → interview
+    #   fail & attempts<3 → optimize（重试）
+    #   fail & attempts>=3 → interview（超限仍产出）
     graph.add_conditional_edges(
         "review",
         route_after_review,
-        {"interview": "interview", "optimize": "optimize", END: END},
+        {"interview": "interview", "optimize": "optimize"},
     )
 
     # 面试建议生成后直接输出文档（失败也走 write_output，由节点兜底）
@@ -459,6 +512,9 @@ def run_optimize(
         "interview_questions": [],
         "interview_advice": "",
         "resume_docx_path": "",
+        "resume_html_path": "",
+        "resume_yaml_path": "",
+        "resume_check_report": "",
         "advice_docx_path": "",
         "error": "",
         "attempts": 0,
@@ -476,6 +532,9 @@ def run_optimize(
         ("interview_questions", []),
         ("interview_advice", ""),
         ("resume_docx_path", ""),
+        ("resume_html_path", ""),
+        ("resume_yaml_path", ""),
+        ("resume_check_report", ""),
         ("advice_docx_path", ""),
         ("error", ""),
     ):

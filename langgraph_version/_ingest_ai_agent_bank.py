@@ -106,13 +106,18 @@ def main() -> None:
     import hashlib
 
     from interview_knowledge_base import (
+        _TITLE_ID_SUFFIX,
         _get_interview_collection,
+        _get_interview_title_collection,
         _to_document,
         _to_metadata,
+        _to_title_document,
     )
 
     collection = _get_interview_collection()
+    title_col = _get_interview_title_collection()
     ids, documents, metadatas = [], [], []
+    title_ids, title_documents, title_metadatas = [], [], []
     for item in final:
         qid = "exp_" + hashlib.md5(
             f"{item.get('_num', 0)}|{item.get('question', '')}".encode("utf-8")
@@ -120,11 +125,22 @@ def main() -> None:
         doc = _to_document(item)
         if not doc.strip():
             continue
+        metas = _to_metadata(item)
         ids.append(qid)
         documents.append(doc)
-        metadatas.append(_to_metadata(item))
+        metadatas.append(metas)
+        # 同步写标题索引（短文本检索单元），避免检索回退全文集合查询（慢且召回差）
+        title_ids.append(qid + _TITLE_ID_SUFFIX)
+        title_documents.append(_to_title_document(item))
+        title_metadatas.append(metas)
 
     collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    try:
+        title_col.upsert(
+            ids=title_ids, documents=title_documents, metadatas=title_metadatas
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("写入标题索引失败（不影响全文）: %s", e)
     added = len(ids)
     total = count_questions()
     print(json.dumps({"解析": len(items), "新增": added, "题库总数": total}, ensure_ascii=False, indent=2))

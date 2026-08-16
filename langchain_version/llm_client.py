@@ -266,6 +266,74 @@ def _mock_scene_optimize_resume(_prompt: str, _system: str | None = None) -> str
     )
 
 
+def _mock_scene_parse_resume_data(_prompt: str, _system: str | None = None) -> str:
+    """resume_formatter 简历结构化解析（纯文本 → ResumeData JSON）。"""
+    return json.dumps(
+        {
+            "basic": {
+                "name": "李小明",
+                "title": "AI产品经理",
+                "location": "北京",
+                "email": "lixiaoming@example.com",
+                "phone": "138-1234-5678",
+                "website": "",
+                "github": "github.com/lixiaoming",
+                "linkedin": "linkedin.com/in/lixiaoming",
+                "summary": "5年AI产品经验，主导过3个大模型应用从0到1落地，精通RAG、Prompt工程、AIGC产品设计，DAU最高达500万，擅长跨团队协调推动复杂项目。",
+            },
+            "education": [
+                {"school": "清华大学", "degree": "硕士", "major": "计算机科学与技术", "period": "2018.09 - 2021.06", "gpa": "3.8/4.0", "highlights": ["国家奖学金"]},
+                {"school": "北京大学", "degree": "本科", "major": "软件工程", "period": "2014.09 - 2018.06", "gpa": "", "highlights": []},
+            ],
+            "experience": [
+                {
+                    "company": "字节跳动",
+                    "position": "AI产品经理（高级）",
+                    "period": "2023.03 - 至今",
+                    "location": "北京",
+                    "points": [
+                        "主导豆包大模型垂直行业产品从0到1搭建，上线3个月DAU突破500万，用户次日留存提升30%",
+                        "设计RAG检索增强方案，引入多路召回+精排架构，答案准确率从72%提升至91%，幻觉率下降45%",
+                        "跨团队协调算法/工程/设计/运营5个团队，推动3个核心大版本按期上线，里程碑达成率100%",
+                    ],
+                },
+                {
+                    "company": "阿里巴巴",
+                    "position": "产品经理",
+                    "period": "2021.07 - 2023.02",
+                    "location": "杭州",
+                    "points": [
+                        "负责阿里通义千问电商助手模块，订单转化率提升18%，月GMV增加2.3亿元",
+                        "搭建产品数据看板与A/B测试体系，累计完成42次A/B实验，决策效率提升2倍",
+                    ],
+                },
+            ],
+            "projects": [
+                {
+                    "name": "智能简历优化Agent",
+                    "role": "产品负责人 & 开发者",
+                    "period": "2024.06 - 2024.08",
+                    "tech_stack": ["LangChain", "RAG", "FastAPI", "Vue", "ChromaDB"],
+                    "link": "github.com/example/resume-agent",
+                    "points": [
+                        "基于LLM多Agent协作架构的简历内容优化系统，支持JD匹配度评分，GitHub 2k+ Stars",
+                        "设计LangGraph工作流，拆解岗位→公司分析→优化→审核→面试建议5个核心Agent",
+                    ],
+                },
+            ],
+            "skills": [
+                {"name": "产品技能", "items": ["需求分析", "PRD撰写", "用户研究", "A/B测试", "数据分析", "项目管理"]},
+                {"name": "AI能力", "items": ["RAG架构", "Prompt Engineering", "大模型评估", "微调策略", "Agent设计"]},
+                {"name": "技术能力", "items": ["Python", "SQL", "LangChain", "ChromaDB", "FastAPI"]},
+            ],
+            "awards": [],
+            "certifications": [],
+            "languages": [],
+        },
+        ensure_ascii=False,
+    )
+
+
 MOCK_SCENARIOS: dict[str, Callable[[str, str | None], str]] = {
     "analyze_jd": _mock_scene_analyze_jd,
     "analyze_jd_basic": _mock_scene_analyze_jd_basic,
@@ -276,6 +344,7 @@ MOCK_SCENARIOS: dict[str, Callable[[str, str | None], str]] = {
     "matching_table": _mock_scene_matching_table,
     "resume_review": _mock_scene_resume_review,
     "optimize_resume": _mock_scene_optimize_resume,
+    "parse_resume_data": _mock_scene_parse_resume_data,
 }
 
 

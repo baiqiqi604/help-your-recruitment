@@ -60,6 +60,26 @@ def _warmup() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("预热：embedding 模型加载失败（将按需加载）: %s", e)
 
+    # 2) 面试题库标题索引自愈 + 检索预热：
+    #    旧库/重建脚本可能漏写标题索引（interview_kb_title 为空），此时
+    #    search_questions 每次回退全文集合查询（首查 ~2s 且召回差）。
+    #    启动时检测并自动重建，同时做一次真实查询把 HNSW 索引加载挪到启动阶段。
+    try:
+        from interview_knowledge_base import (
+            _get_interview_title_collection,
+            count_questions,
+            rebuild_interview_title_index,
+            search_questions,
+        )
+
+        if count_questions() > 0 and _get_interview_title_collection().count() == 0:
+            rebuilt = rebuild_interview_title_index()
+            logger.info("预热：重建标题索引 %d 条（%.1fs）", rebuilt, time.time() - t0)
+        search_questions("预热 面试", top_k=3, max_distance=1.0)
+        logger.info("预热：题库检索查询完成（累计 %.1fs）", time.time() - t0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("预热：题库预热失败（将按需自愈/加载）: %s", e)
+
     # 2) LLM：首次调用建立连接（MOCK 模式跳过）
     try:
         import llm_client
@@ -414,8 +434,17 @@ def optimize(request: OptimizeRequest) -> dict[str, Any]:
         "company_research": result.get("company_research", {}),
         "interview_questions": result.get("interview_questions", []),
         "interview_advice": result.get("interview_advice", ""),
+        # 文档下载（Word 版）
         "resume_docx": Path(result.get("resume_docx_path", "")).name,
         "advice_docx": Path(result.get("advice_docx_path", "")).name,
+        # 《resume-formatter》Skill 新增产出
+        "resume_html": Path(result.get("resume_html_path", "")).name,      # 精美 HTML 简历（浏览器→打印→导出PDF）
+        "resume_yaml": Path(result.get("resume_yaml_path", "")).name,      # 结构化 YAML 数据（便于迭代）
+        "resume_check_report": result.get("resume_check_report", ""),      # 简历质量检查报告（Markdown）
+        "pdf_export_guide": (
+            "💡 PDF导出方法：用 Chrome/Edge 打开下载的 HTML 简历 → 按 Ctrl+P → "
+            "打印机选择「另存为PDF」 → 纸张尺寸A4 → 边距选「无」或默认 → 勾选「背景图形」 → 保存。"
+        ),
     }
 
 
@@ -439,6 +468,9 @@ def download_file(filename: str) -> Any:
         raise HTTPException(status_code=400, detail="非法文件路径")
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"文件不存在: {filename}")
+    # HTML 文件直接内嵌展示（浏览器内渲染），其他文件走下载
+    if target.suffix.lower() == ".html":
+        return FileResponse(target, media_type="text/html", filename=None)
     return FileResponse(target, filename=target.name)
 
 

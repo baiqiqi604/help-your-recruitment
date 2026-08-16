@@ -329,6 +329,24 @@
         <p class="hint" id="doc-links-content"></p>
       </div>
 
+      <div class="form-row" id="resume-formatter-links" style="display:none;">
+        <label>精美排版简历（来自 《resume-formatter》 Skill）</label>
+        <div id="resume-formatter-content" style="line-height:2.2;"></div>
+      </div>
+
+      <div class="form-row" id="resume-check-box" style="display:none;">
+        <div class="label-row">
+          <label>简历质量检查清单（4 大类 · 12 项 · 百分制评分）</label>
+          <button type="button" class="btn-mini" onclick="
+            var b=document.getElementById('resume-check-report');
+            b.style.display=(b.style.display==='none'?'block':'none');
+          ">
+            <i class="ti ti-chevron-down"></i> 展开/收起
+          </button>
+        </div>
+        <textarea id="resume-check-report" rows="12" readonly style="white-space:pre-wrap; font-family:Menlo,Consolas,monospace; display:none;"></textarea>
+      </div>
+
       <div class="form-row">
         <label>岗位分析（jd_analysis）</label>
         <pre id="jd-analysis"></pre>
@@ -728,6 +746,12 @@
         renderMatchingTable(data.matching_table || []);
         renderQuestionTable(data.interview_questions || []);
         renderDocLinks(data.resume_docx || "", data.advice_docx || "");
+        renderResumeFormatterCards(
+          data.resume_html || "",
+          data.resume_yaml || "",
+          data.resume_check_report || "",
+          data.pdf_export_guide || ""
+        );
         document.getElementById("result").style.display = "block";
         setStatus("success", "定制完成！已生成定制化简历与面试建议。");
       } catch (err) {
@@ -750,6 +774,42 @@
       }
       content.innerHTML = links.join("　|　");
       box.style.display = "block";
+    }
+
+    function renderResumeFormatterCards(resumeHtml, resumeYaml, checkReport, pdfGuide) {
+      // 1) HTML + YAML 下载卡片
+      const box = document.getElementById("resume-formatter-links");
+      const content = document.getElementById("resume-formatter-content");
+      if (!resumeHtml && !resumeYaml) { box.style.display = "none"; } else {
+        const items = [];
+        if (resumeHtml) {
+          items.push(
+            '<a class="btn btn-outline" style="margin-right:10px;" href="/api/download?filename=' + encodeURIComponent(resumeHtml) + '" target="_blank">' +
+            '<i class="ti ti-brand-chrome"></i> 下载 HTML 简历（推荐：浏览器 Ctrl+P → 导出 PDF）</a>'
+          );
+        }
+        if (resumeYaml) {
+          items.push(
+            '<a class="btn btn-outline" style="margin-right:10px;" href="/api/download?filename=' + encodeURIComponent(resumeYaml) + '" target="_blank">' +
+            '<i class="ti ti-file-type-yaml"></i> 下载结构化 YAML 数据</a>'
+          );
+        }
+        if (pdfGuide) {
+          items.push('<p style="margin-top:8px;" class="hint"><i class="ti ti-info-circle"></i> ' + pdfGuide + '</p>');
+        }
+        content.innerHTML = items.join("");
+        box.style.display = "block";
+      }
+      // 2) 简历检查清单
+      const checkBox = document.getElementById("resume-check-box");
+      const checkText = document.getElementById("resume-check-report");
+      if (!checkReport) { checkBox.style.display = "none"; } else {
+        checkText.value = checkReport;
+        checkBox.style.display = "block";
+        if ((checkReport.match(/\n/g) || []).length <= 30) {
+          checkText.style.display = "block";
+        }
+      }
     }
 
     // ── 面试题库 ──

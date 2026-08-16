@@ -15,9 +15,12 @@ import sys
 from datetime import datetime
 
 from interview_knowledge_base import (
+    _TITLE_ID_SUFFIX,
     _get_interview_collection,
+    _get_interview_title_collection,
     _to_document,
     _to_metadata,
+    _to_title_document,
     clear_interview_kb,
     count_questions,
 )
@@ -119,16 +122,31 @@ def main() -> None:
     print(f"清空原库: {removed}")
 
     collection = _get_interview_collection()
+    title_col = _get_interview_title_collection()
     ids, documents, metadatas = [], [], []
+    title_ids, title_documents, title_metadatas = [], [], []
     for item in ai_pm + ai_agent:
         doc = _to_document(item)
         if not doc.strip():
             continue
-        ids.append(_unique_id(item))
+        qid = _unique_id(item)
+        ids.append(qid)
         documents.append(doc)
-        metadatas.append(_to_metadata(item))
+        metas = _to_metadata(item)
+        metadatas.append(metas)
+        # 同步写标题索引（短文本检索单元），避免重建后标题集合为空、
+        # search_questions 回退全文集合查询（首查 ~2s 且召回差）
+        title_ids.append(qid + _TITLE_ID_SUFFIX)
+        title_documents.append(_to_title_document(item))
+        title_metadatas.append(metas)
 
     collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    try:
+        title_col.upsert(
+            ids=title_ids, documents=title_documents, metadatas=title_metadatas
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("写入标题索引失败（不影响全文）: %s", e)
     total = count_questions()
     print(json.dumps({"AI_PM": len(ai_pm), "AI_Agent": len(ai_agent), "新增": len(ids), "题库总数": total}, ensure_ascii=False, indent=2))
 

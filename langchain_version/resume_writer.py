@@ -294,5 +294,72 @@ def write_interview_advice_docx(advice_text: str, output_docx: str) -> str:
     return str(out)
 
 
+# ──────────────────────────────────────────────
+# HTML 简历 / 结构化 YAML 输出（对应《resume-formatter》Skill）
+# ──────────────────────────────────────────────
+def write_customized_resume_html(
+    optimized_text: str,
+    output_html: str,
+    output_yaml: str | None = None,
+    template: str = "classic",
+) -> dict[str, str]:
+    """将优化后的简历文本生成为精美 HTML 简历 + 结构化 YAML 数据文件。
+
+    流程：纯文本 → LLM/规则结构化解析为 ResumeData → 按模板渲染为 HTML + YAML。
+    解析失败不会抛异常，会退回最简规则结构，保证一定能产出文件。
+
+    Args:
+        optimized_text: 优化后的简历纯文本（来自 content_optimizer）
+        output_html: 输出 HTML 文件路径（必填）
+        output_yaml: 输出 YAML 数据文件路径（可选，默认在同目录下加 _data.yaml 后缀）
+        template: 模板风格（classic / modern / professional / tech）
+
+    Returns:
+        {"html_path": 绝对路径, "yaml_path": 绝对路径, "check_report": 检查报告文本}
+    """
+    from pathlib import Path as _Path
+
+    from resume_formatter import (
+        DEFAULT_TEMPLATE,
+        format_check_report,
+        parse_resume_text_to_data,
+        render_resume_html,
+        resume_to_yaml,
+        run_resume_check,
+    )
+
+    if not optimized_text or not optimized_text.strip():
+        raise ValueError("简历文本不能为空")
+
+    # 解析为结构化数据
+    data = parse_resume_text_to_data(optimized_text)
+    tpl = template if template in {"classic", "modern", "professional", "tech"} else DEFAULT_TEMPLATE
+
+    # 写 HTML
+    html_out = _Path(output_html)
+    html_out.parent.mkdir(parents=True, exist_ok=True)
+    html_out.write_text(render_resume_html(data, template=tpl), encoding="utf-8")
+    logger.info("HTML 简历已保存: %s", html_out)
+
+    # 写 YAML
+    if output_yaml:
+        yaml_out = _Path(output_yaml)
+    else:
+        yaml_out = html_out.with_name(html_out.stem + "_data.yaml")
+    yaml_out.parent.mkdir(parents=True, exist_ok=True)
+    yaml_out.write_text(resume_to_yaml(data), encoding="utf-8")
+    logger.info("简历 YAML 数据已保存: %s", yaml_out)
+
+    # 质量检查报告
+    check_results = run_resume_check(data, resume_text=optimized_text)
+    check_report = format_check_report(check_results)
+
+    return {
+        "html_path": str(html_out.resolve()),
+        "yaml_path": str(yaml_out.resolve()),
+        "check_report": check_report,
+    }
+
+
 if __name__ == "__main__":
     print("resume_writer 模块自测：需要传入实际文件路径")

@@ -267,30 +267,62 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _write(state: dict[str, Any]) -> dict[str, Any]:
-    """write：生成定制化简历与面试建议 Word 文档。"""
+    """write：生成定制化简历（Word + HTML + YAML）与面试建议 Word 文档。
+
+    新增产出（对应《resume-formatter》Skill）：
+    - resume_html_path：精美 HTML 简历（浏览器打开 Ctrl+P 导出 PDF）
+    - resume_yaml_path：结构化 YAML 数据（便于后续迭代）
+    - resume_check_report：简历质量检查清单（Markdown）
+    """
     if state.get("error"):
         return state  # 前置节点已失败，短路（不再覆盖 error）
-    from resume_writer import write_customized_resume, write_interview_advice_docx
+    from resume_writer import (
+        write_customized_resume,
+        write_customized_resume_html,
+        write_interview_advice_docx,
+    )
 
     target_company = _sanitize_filename(state.get("target_company", "") or "未知公司")
     role_position = _sanitize_filename((state.get("jd_analysis") or {}).get("role_position", "") or "目标岗位")
+
+    # 模板风格：统一使用 classic（匹配用户提供的 PDF 简历版式）
+    default_template = "classic"
 
     out_dir = Path(PATH_CONFIG["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
     resume_docx_path = ""
+    resume_html_path = ""
+    resume_yaml_path = ""
+    resume_check_report = ""
     advice_docx_path = ""
     error = ""
 
     optimized_text = (state.get("optimized_text") or "").strip()
     if optimized_text:
+        # 1) Word 输出
         try:
             resume_docx_path = write_customized_resume(
                 optimized_text, str(out_dir / f"定制化简历_{target_company}_{role_position}.docx")
             )
         except Exception as e:  # noqa: BLE001
-            logger.warning("定制化简历文档生成失败: %s", e)
-            error = f"定制化简历文档生成失败: {e}"
+            logger.warning("定制化简历 Word 生成失败: %s", e)
+            error = f"定制化简历 Word 生成失败: {e}"
+
+        # 2) HTML + YAML + 检查报告（《resume-formatter》Skill）
+        try:
+            html_out = write_customized_resume_html(
+                optimized_text,
+                output_html=str(out_dir / f"定制化简历_{target_company}_{role_position}_{default_template}.html"),
+                output_yaml=str(out_dir / f"定制化简历_{target_company}_{role_position}_data.yaml"),
+                template=default_template,
+            )
+            resume_html_path = html_out["html_path"]
+            resume_yaml_path = html_out["yaml_path"]
+            resume_check_report = html_out["check_report"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("HTML 简历生成失败: %s", e)
+            error = (error + "；" if error else "") + f"HTML 简历生成失败: {e}"
 
     advice_text = (state.get("interview_advice") or "").strip()
     if advice_text:
@@ -303,13 +335,18 @@ def _write(state: dict[str, Any]) -> dict[str, Any]:
             error = (error + "；" if error else "") + f"面试建议文档生成失败: {e}"
 
     logger.info(
-        "write：简历文档=%s，面试建议文档=%s",
+        "write：Word=%s，HTML=%s，YAML=%s，面试建议=%s",
         resume_docx_path or "（未生成）",
+        resume_html_path or "（未生成）",
+        resume_yaml_path or "（未生成）",
         advice_docx_path or "（未生成）",
     )
     return {
         **state,
         "resume_docx_path": resume_docx_path,
+        "resume_html_path": resume_html_path,
+        "resume_yaml_path": resume_yaml_path,
+        "resume_check_report": resume_check_report,
         "advice_docx_path": advice_docx_path,
         "error": error,
     }
@@ -358,6 +395,9 @@ def run_optimize(
         "interview_questions": [],
         "interview_advice": "",
         "resume_docx_path": "",
+        "resume_html_path": "",
+        "resume_yaml_path": "",
+        "resume_check_report": "",
         "advice_docx_path": "",
         "error": "",
         "attempts": 0,
@@ -375,6 +415,9 @@ def run_optimize(
         ("interview_questions", []),
         ("interview_advice", ""),
         ("resume_docx_path", ""),
+        ("resume_html_path", ""),
+        ("resume_yaml_path", ""),
+        ("resume_check_report", ""),
         ("advice_docx_path", ""),
         ("error", ""),
     ):

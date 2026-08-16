@@ -57,13 +57,22 @@ pip install -r requirements.txt
 cp .env.example .env               # 填写 LLM_PROVIDER 与对应 API Key
 
 # 4. 启动 Web 服务（浏览器访问 http://127.0.0.1:8000）
+#    推荐：统一启动器（后台守护、幂等、自动设置 HF 离线变量）：
+python scripts/start_server.py                 # 启动（默认 langgraph 主力版）
+python scripts/start_server.py status          # 查询运行状态
+python scripts/start_server.py stop            # 停止服务
+python scripts/start_server.py restart         # 重启
+python scripts/start_server.py --version langchain --port 8001   # 指定版本/端口
+#    或前台运行（终端退出即停止）：
 python main.py web
 ```
 
-> 💡 **网络受限环境**：Embedding 模型加载会联网检查 HuggingFace，可用离线脚本启动避免卡死：
-> ```bash
-> python start_web_offline.py 8000
-> ```
+> 💡 **后台运行说明**：`python main.py web` 会占用当前终端，且在自动化会话中直接
+> nohup / PowerShell 后台启动的 uvicorn 会随调用方进程树被清理。
+> `python scripts/start_server.py` 会以脱离终端进程树的方式后台启动 uvicorn
+> （Windows 下脱离 Job 对象；POSIX 下新会话），启动命令返回后服务持续运行，
+> 并内置「已在运行则跳过」的幂等逻辑与健康检查等待。日志追加在
+> `<版本目录>/web_out.log` 与 `<版本目录>/web_err.log`，PID 记录于 `<版本目录>/.server.pid`。
 
 ### CLI 用法
 

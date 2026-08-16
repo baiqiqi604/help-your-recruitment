@@ -63,3 +63,6 @@ models/
 
 # ── 本地验证产物 ──
 web_verify.*
+
+# ── 个人信息文件（真实简历 PDF，含个人隐私，不入库）──
+langgraph_version/tests/*.pdf
