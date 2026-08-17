@@ -25,7 +25,9 @@ else:
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(BASE_DIR / ".env")
+    # override=True：.env 中的正式配置优先于进程环境变量，
+    # 避免环境残留的旧 key/provider 覆盖 .env（曾导致 401 invalid_api_key）
+    load_dotenv(BASE_DIR / ".env", override=True)
 except ImportError:
     pass
 
@@ -70,6 +72,18 @@ LLM_PROVIDERS = {
         "model_name": "glm-4-flash",
         "env_key": "ZHIPU_API_KEY",
         "label": "智谱 GLM",
+    },
+    "mimo": {
+        "base_url": "https://api.xiaomimimo.com/v1",
+        "model_name": "mimo-v2.5-pro",
+        "env_key": "MIMO_API_KEY",
+        "label": "小米 MiMo",
+    },
+    "ark": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "model_name": "doubao-seed-1-6-flash",
+        "env_key": "ARK_API_KEY",
+        "label": "火山方舟",
     },
 }
 
