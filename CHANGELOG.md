@@ -13,6 +13,7 @@
 
 ### 修复
 - **fix** start_server.py 按端口反查真实监听 PID 写入 .server.pid（启动器进程与实际 uvicorn PID 不同导致 stop/restart 失效），恢复服务正常停止；增强 Windows 脱离 flags（CREATE_NEW_PROCESS_GROUP）。
+- **fix** llm_client 健壮性：qwen3 系列自动关闭 thinking（提速并保证输出规范）；chat 空响应自动重试并回退 reasoning_content；chat_structured 降级解析失败时返回空结构而非抛错，避免中断流水线。
 
 ---
 

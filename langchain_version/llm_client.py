@@ -441,6 +441,11 @@ def _make_llm(max_tokens: int | None = None):
         LLM_CONFIG["base_url"],
         LLM_CONFIG["model_name"],
     )
+    # qwen3 系列默认思考模式：单次调用慢（reasoning 长）且常夹带自然语言，
+    # 导致 JSON 解析失败与流水线整体超时；统一关闭 thinking 提速并保证输出规范
+    model_kwargs: dict[str, Any] = {}
+    if LLM_CONFIG["model_name"].startswith("qwen3"):
+        model_kwargs["extra_body"] = {"enable_thinking": False}
     return ChatOpenAI(
         model=LLM_CONFIG["model_name"],
         api_key=api_key,
@@ -448,6 +453,7 @@ def _make_llm(max_tokens: int | None = None):
         temperature=LLM_CONFIG["temperature"],
         max_tokens=max_tokens or LLM_CONFIG["max_tokens"],
         timeout=LLM_CONFIG["timeout"],
+        model_kwargs=model_kwargs,
     )
 
 
@@ -483,7 +489,17 @@ def chat(
     messages.append(HumanMessage(content=prompt))
 
     response = llm.invoke(messages)
-    return extract_text_content(response.content)
+    text = extract_text_content(response.content)
+    # 兜底：qwen3 系列思考模型偶发返回空 content（内容在 reasoning_content），
+    # 空响应自动重试一次；仍空则回退 reasoning_content，避免答疑返回空回复
+    if not text.strip():
+        response = llm.invoke(messages)
+        text = extract_text_content(response.content)
+    if not text.strip():
+        reasoning = getattr(response, "reasoning_content", None)
+        if reasoning:
+            text = extract_text_content(reasoning)
+    return text
 
 
 def stream_chat(
@@ -578,9 +594,16 @@ def chat_structured(
         logger.warning("结构化解析失败，降级手写解析: %s", e)
         import pydantic
 
-        if isinstance(model_cls, type) and issubclass(model_cls, pydantic.RootModel):
-            return parse_llm_json_array(raw)
-        return parse_llm_json(raw)
+        try:
+            if isinstance(model_cls, type) and issubclass(model_cls, pydantic.RootModel):
+                return parse_llm_json_array(raw)
+            return parse_llm_json(raw)
+        except Exception as e2:  # noqa: BLE001
+            # 降级仍失败（如模型输出自然语言）：返回空结构，避免中断主流程
+            logger.warning("降级解析也失败，返回空结构: %s", e2)
+            if isinstance(model_cls, type) and issubclass(model_cls, pydantic.RootModel):
+                return []
+            return {}
 
 
 def parse_llm_json(response_text: str) -> dict[str, Any]:
