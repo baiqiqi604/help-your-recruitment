@@ -71,6 +71,47 @@ def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def _port_pid(host: str, port: int) -> int | None:
+    """解析监听端口的真实进程 PID。
+
+    背景：.venv 的 python.exe 可能是启动器进程，`python -m uvicorn ...`
+    实际运行在它的子进程中（Popen 返回的 PID ≠ uvicorn PID）。若把 Popen
+    PID 写入 .server.pid，stop/restart 会杀不到服务进程（PID 文件失效、
+    端口被占无法停止）。因此按端口反查真实监听 PID。
+
+    Windows 用 netstat -ano 解析；POSIX 用 lsof -i。解析失败返回 None。
+    """
+    try:
+        if sys.platform.startswith("win"):
+            out = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10,
+            ).stdout
+            marker = f":{port}"
+            for line in out.splitlines():
+                if "LISTENING" not in line:
+                    continue
+                # 行格式：协议  本地地址  外部地址  状态  PID
+                parts = line.split()
+                if len(parts) >= 5 and marker in parts[1]:
+                    return int(parts[-1])
+            return None
+        # POSIX：优先 lsof，缺失时回退 fuser
+        for cmd in (["lsof", "-i", f"tcp:{port}", "-sTCP:LISTEN", "-t"],
+                    ["fuser", f"{port}/tcp"]):
+            try:
+                out = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=10,
+                ).stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if out:
+                return int(out.splitlines()[0])
+        return None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
 def _health_ok(host: str, port: int, timeout: float = 2.0) -> bool:
     """请求 /api/health，返回是否 200。"""
     try:
@@ -177,7 +218,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     try:
         if sys.platform.startswith("win"):
             # 脱离调用方 Job 对象：避免随启动命令的进程树被清理
-            flags = subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.DETACHED_PROCESS
+            flags = (
+                subprocess.CREATE_BREAKAWAY_FROM_JOB
+                | subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
             proc = subprocess.Popen(
                 cmd, cwd=str(version_dir), env=env,
                 stdout=out_log, stderr=err_log, stdin=subprocess.DEVNULL,
@@ -200,7 +245,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     deadline = time.time() + args.wait
     while time.time() < deadline:
         if _health_ok(args.host, args.port):
-            print(f"[start] 健康检查通过：http://{args.host}:{args.port} ✅")
+            # 记录真实监听进程 PID：启动器进程与实际 uvicorn 可能不同，
+            # 用 Popen PID 会导致 stop/restart 杀不到服务进程
+            real_pid = _port_pid(args.host, args.port) or proc.pid
+            _pid_file(version_dir).write_text(str(real_pid), encoding="utf-8")
+            print(f"[start] 健康检查通过：http://{args.host}:{args.port} ✅（服务 PID {real_pid}）")
             return 0
         time.sleep(1)
     print(
