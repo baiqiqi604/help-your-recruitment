@@ -8,7 +8,8 @@
 
 ## [Unreleased]
 
-（暂无新变更。未来提交按文末「记录未来的提交」规则在此记录。）
+### 新增
+- **feat** 简历支持证件照：前端 canvas 压缩上传（.jpg/.png，≤20MB 自动压缩至 512px），后端 PIL 预缩放（draft+thumbnail 400px+JPEG）插入 Word/HTML 简历右上角；新增 pillow 依赖、照片链路测试，双版同步。
 
 ---
 

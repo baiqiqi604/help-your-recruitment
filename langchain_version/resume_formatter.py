@@ -1447,6 +1447,11 @@ def _render_classic(data: ResumeData) -> str:
     header_left_html = "".join(f"<div>{line}</div>" for line in header_left)
     header_right_html = "".join(f"<div>{line}</div>" for line in header_right)
 
+    # 证件照（可选）：右侧浮动显示，无照片时不占位
+    avatar_html = ""
+    if b.avatar:
+        avatar_html = f'<img class="header-avatar" src="{_h(b.avatar)}" alt="证件照">'
+
     # ── 章节：自我评价 ──
     summary_html = ""
     if b.summary:
@@ -1620,7 +1625,21 @@ def _render_classic(data: ResumeData) -> str:
   }}
   /* ── 头部 ── */
   .header {{
+    position: relative;
     margin-bottom: 8mm;
+  }}
+  .header::after {{
+    content: "";
+    display: block;
+    clear: both;
+  }}
+  .header-avatar {{
+    float: right;
+    width: 25mm;
+    height: 33mm;
+    object-fit: cover;
+    margin-left: 4mm;
+    border: 0.5pt solid #cccccc;
   }}
   .header-name {{
     font-size: 25pt;
@@ -1797,6 +1816,7 @@ def _render_classic(data: ResumeData) -> str:
 
   <!-- 头部 -->
   <div class="header">
+    {avatar_html}
     <div class="header-name">{_h(name)}</div>
     <div class="header-info">
       <div class="header-col">

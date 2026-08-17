@@ -302,6 +302,16 @@
       </div>
 
       <div class="form-row">
+        <label for="photo-file">上传证件照（可选，插入生成简历右上角；.jpg / .png，≤ 20MB 自动压缩）</label>
+        <div class="flex-row">
+          <input type="file" id="photo-file" accept="image/jpeg,image/png" class="upload-input" />
+          <img id="photo-preview" alt="证件照预览" style="display:none; height:60px; width:auto; border:1px solid #cbd5e1; border-radius:4px; background:#f8fafc;" />
+          <button type="button" class="btn-mini" id="photo-remove-btn" onclick="removePhoto()" style="display:none;"><i class="ti ti-x"></i> 移除</button>
+        </div>
+        <p class="hint" id="photo-hint">可选。上传后会在生成的 Word / HTML 简历右上角显示证件照，不上传则不带照片。</p>
+      </div>
+
+      <div class="form-row">
         <label for="resume-text">简历文本（必填）</label>
         <textarea id="resume-text" rows="10" placeholder="粘贴原始简历全文，或上传文件自动填入…"></textarea>
       </div>
@@ -699,6 +709,69 @@
       }
     }
 
+    // ── 证件照上传（可选）：canvas 压缩后再预览/上传，避免大图内存与体积问题 ──
+    let photoBase64 = "";
+    const photoInput = document.getElementById("photo-file");
+    const photoHint = document.getElementById("photo-hint");
+    if (photoInput) {
+      photoInput.addEventListener("change", () => {
+        const file = photoInput.files && photoInput.files[0];
+        if (!file) { photoHint.textContent = "未选择文件。"; photoHint.style.color = "#b91c1c"; return; }
+        if (file.size > 20 * 1024 * 1024) {
+          photoHint.textContent = "照片过大（上限 20MB），请更换照片后重试。";
+          photoHint.style.color = "#b91c1c";
+          photoInput.value = "";
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            // 压缩：最长边 512px + JPEG 0.85，足够证件照清晰度，大幅降低内存与上传体积
+            const MAX_EDGE = 512;
+            let w = img.naturalWidth || img.width;
+            let h = img.naturalHeight || img.height;
+            if (w > MAX_EDGE || h > MAX_EDGE) {
+              const scale = MAX_EDGE / Math.max(w, h);
+              w = Math.max(1, Math.round(w * scale));
+              h = Math.max(1, Math.round(h * scale));
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+            photoBase64 = canvas.toDataURL("image/jpeg", 0.85);
+            const preview = document.getElementById("photo-preview");
+            preview.src = photoBase64;
+            preview.style.display = "inline-block";
+            document.getElementById("photo-remove-btn").style.display = "inline-block";
+            photoHint.textContent = "已选择证件照（已自动压缩），将插入生成简历右上角。";
+            photoHint.style.color = "#15803d";
+          };
+          img.onerror = () => {
+            photoHint.textContent = "照片解析失败，请更换图片后重试。";
+            photoHint.style.color = "#b91c1c";
+          };
+          img.src = String(reader.result || "");
+        };
+        reader.onerror = () => {
+          photoHint.textContent = "照片读取失败，请重试。";
+          photoHint.style.color = "#b91c1c";
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+    function removePhoto() {
+      photoBase64 = "";
+      photoInput.value = "";
+      const preview = document.getElementById("photo-preview");
+      preview.src = "";
+      preview.style.display = "none";
+      document.getElementById("photo-remove-btn").style.display = "none";
+      photoHint.textContent = "可选。上传后会在生成的 Word / HTML 简历右上角显示证件照，不上传则不带照片。";
+      photoHint.style.color = "";
+    }
+
     // 上传状态提示：图标（Tabler）+ 文本，文本以 textContent 写入避免注入
     function setUploadHint(iconClass, message, color) {
       const hint = document.getElementById("upload-hint");
@@ -731,7 +804,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             resume_text: resume_text, jd_text: jd_text, job_id: job_id,
-            target_company: target_company
+            target_company: target_company, photo_base64: photoBase64
           })
         });
         const data = await resp.json();

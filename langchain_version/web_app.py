@@ -134,6 +134,7 @@ class OptimizeRequest(BaseModel):
     jd_text: str = Field(default="", description="岗位描述全文")
     job_id: str = Field(default="", description="知识库中的岗位 ID（与 jd_text 二选一）")
     target_company: str = Field(default="", description="目标公司名称（必填）")
+    photo_base64: str = Field(default="", description="证件照（data URI 或纯 base64，可选，≤2MB）")
 
 
 # ──────────────────────────────────────────────
@@ -398,8 +399,28 @@ def optimize(request: OptimizeRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="jd_text 与 job_id 至少提供其一")
 
     logger.info("/api/optimize：开始优化（简历 %d 字，JD %d 字，公司=%s）", len(resume_text), len(jd_text), target_company)
+    # 证件照校验：可选；格式须为 jpeg/png 的 data URI 或纯 base64，解码后 ≤ 2MB
+    photo_base64 = (request.photo_base64 or "").strip()
+    if photo_base64:
+        _raw = photo_base64
+        if _raw.startswith("data:"):
+            if "image/" not in _raw.split(";", 1)[0]:
+                raise HTTPException(status_code=400, detail="照片格式不支持，仅支持 jpeg / png")
+            _raw = _raw.split(",", 1)[1] if "," in _raw else ""
+        try:
+            import base64 as _b64
+
+            photo_bytes = _b64.b64decode(_raw, validate=True)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="照片 base64 数据非法") from None
+        if not photo_bytes:
+            raise HTTPException(status_code=400, detail="照片数据为空")
+        if len(photo_bytes) > 2 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="照片过大（上限 2MB）")
     try:
-        result = run_optimize(resume_text, jd_text, target_company=target_company)
+        result = run_optimize(
+            resume_text, jd_text, target_company=target_company, photo_base64=photo_base64
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception("/api/optimize failed")
         raise HTTPException(status_code=503, detail="简历优化服务暂时不可用") from e

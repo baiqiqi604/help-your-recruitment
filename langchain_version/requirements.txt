@@ -24,6 +24,8 @@ sentence-transformers==5.7.0
 # ──── PDF / Word 处理 ────
 pdf2docx==0.5.13
 python-docx==1.2.0
+# 简历照片插入依赖 pillow（python-docx 的 add_picture 需要它确定图片尺寸并完成缩放）
+pillow==12.3.0
 # docx2pdf 未在本地环境验证过（需 MS Word），保留下限不锁定
 docx2pdf>=0.1.8
 

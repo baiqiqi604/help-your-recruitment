@@ -454,6 +454,42 @@ class TestWriteCustomizedResumeHtml:
             str(tmp_path / "x.html"),
         )
 
+    def test_with_photo_base64(self, tmp_path: Path) -> None:
+        """传入照片 base64 后：HTML 头部出现证件照节点，Word 文档正常生成。"""
+        from resume_writer import write_customized_resume_html
+
+        # 1×1 红色 PNG（最小合法图片，用于验证照片链路）
+        photo_png = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        resume_text = TestHeuristicParse.SAMPLE_TEXT
+        html_path = tmp_path / "out_photo.html"
+        docx_path = tmp_path / "out_photo.docx"
+
+        result = write_customized_resume_html(
+            resume_text,
+            output_html=str(html_path),
+            template=TEMPLATE_CLASSIC,
+            output_docx=str(docx_path),
+            photo_base64=photo_png,
+        )
+
+        html = html_path.read_text(encoding="utf-8")
+        assert 'class="header-avatar"' in html, "classic 模板应渲染证件照节点"
+        assert "data:image" not in html, "照片以 data URI 形式渲染"
+        assert Path(result["docx_path"]).exists(), "带照片的 Word 简历应生成成功"
+
+    def test_no_photo_keeps_layout(self, tmp_path: Path) -> None:
+        """未传照片时 HTML 不含证件照节点（不占位，保持原版式）。"""
+        from resume_writer import write_customized_resume_html
+
+        resume_text = TestHeuristicParse.SAMPLE_TEXT
+        html_path = tmp_path / "out_nophoto.html"
+        write_customized_resume_html(
+            resume_text, output_html=str(html_path), template=TEMPLATE_CLASSIC
+        )
+        assert 'class="header-avatar"' not in html_path.read_text(encoding="utf-8")
+
 
 # 如果直接运行此文件，也可以通过简单的 print 自测
 if __name__ == "__main__":

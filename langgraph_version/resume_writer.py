@@ -306,6 +306,7 @@ def write_customized_resume_html(
     output_yaml: str | None = None,
     template: str = "classic",
     output_docx: str | None = None,
+    photo_base64: str = "",
 ) -> dict[str, str]:
     """将优化后的简历文本生成为精美 HTML 简历 + 结构化 YAML 数据文件。
 
@@ -319,6 +320,8 @@ def write_customized_resume_html(
         template: 模板风格（classic / modern / professional / tech）
         output_docx: 可选，同时输出一页 A4 精美 Word 简历路径
             （与 HTML 共用同一次结构化解析，避免重复调用 LLM）
+        photo_base64: 可选，用户上传的照片（data URI 或纯 base64），
+            写入 ResumeData.basic.avatar 后由 HTML / Word 模板渲染
 
     Returns:
         {"html_path": 绝对路径, "yaml_path": 绝对路径, "check_report": 检查报告文本,
@@ -341,6 +344,10 @@ def write_customized_resume_html(
 
     # 解析为结构化数据
     data_full = parse_resume_text_to_data(optimized_text)
+    # 用户上传的照片（data URI / 纯 base64）写入头像字段，
+    # HTML 与 Word 版共用同一份数据渲染（fit 深拷贝后自动保留）
+    if photo_base64:
+        data_full.basic.avatar = photo_base64.strip()
     tpl = template if template in {"classic", "modern", "professional", "tech"} else DEFAULT_TEMPLATE
 
     # 一页 A4 约束：仅对「渲染」使用裁剪副本（限制经历/项目段数与每段要点数），
@@ -387,6 +394,71 @@ def write_customized_resume_html(
         "check_report": check_report,
         "docx_path": docx_path,
     }
+
+
+def insert_photo_into_cell(
+    cell,
+    avatar_base64: str,
+    width_mm: float = 25,
+    max_height_mm: float = 33,
+) -> bool:
+    """把 base64 证件照插入表格单元格（右对齐，按原图比例约束高度）。
+
+    Args:
+        cell: python-docx 表格单元格
+        avatar_base64: data URI（data:image/...;base64,xxx）或纯 base64 字符串
+        width_mm: 照片宽度（毫米）
+        max_height_mm: 照片最大高度（毫米，超比例时按宽度缩放）
+
+    Returns:
+        是否插入成功；任何失败只记日志并返回 False，不影响简历主流程
+    """
+    try:
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Mm, Pt
+
+        import base64 as _b64
+        import io as _io
+
+        raw = (avatar_base64 or "").strip()
+        if not raw:
+            return False
+        if raw.startswith("data:"):
+            raw = raw.split(",", 1)[1] if "," in raw else raw
+        img_bytes = _b64.b64decode(raw, validate=True)
+        img = _io.BytesIO(img_bytes)
+
+        # 预缩放 + 统一转 JPEG：避免大分辨率照片解码占用过高内存，
+        # 同时显著减小生成的 docx 体积（25mm 打印宽度约百像素，400px 足够清晰）
+        height_mm = float(max_height_mm)
+        img_stream = img
+        try:
+            from PIL import Image
+
+            with Image.open(img) as im:
+                # draft 按目标尺寸低分辨率解码（JPEG/MPO 生效），
+                # 大图（如 4000×3000）解码内存从数十 MB 降到不到 1MB
+                im.draft("RGB", (400, 400))
+                im = im.convert("RGB")
+                im.thumbnail((400, 400))
+                w, h = im.size
+                if w > 0:
+                    height_mm = min(float(max_height_mm), float(width_mm) * h / w)
+                buf = _io.BytesIO()
+                im.save(buf, format="JPEG", quality=90)
+                buf.seek(0)
+                img_stream = buf
+        except Exception:  # noqa: BLE001  # PIL 缺失/解析失败时退化为原始字节 + 固定比例
+            height_mm = float(max_height_mm)
+
+        p = cell.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        p.paragraph_format.space_after = Pt(0)
+        p.add_run().add_picture(img_stream, width=Mm(float(width_mm)), height=Mm(height_mm))
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("简历照片插入失败（忽略）: %s", e)
+        return False
 
 
 def write_customized_resume_docx(
@@ -494,11 +566,7 @@ def write_customized_resume_docx(
         p.paragraph_format.space_after = Pt(1)
         _set_font(p.add_run(text), size=size, bold=bold)
 
-    # ── 头部：姓名 + 两列联系信息 ──
-    p_name = doc.add_paragraph()
-    p_name.paragraph_format.space_after = Pt(4)
-    _set_font(p_name.add_run(name), size=20, bold=True)
-
+    # ── 头部：姓名 + 两列联系信息，右侧可选证件照 ──
     header_left = []
     header_right = []
     if b.title:
@@ -514,17 +582,49 @@ def write_customized_resume_docx(
     if b.github:
         header_right.append(f"GitHub：{b.github}")
 
-    if header_left or header_right:
-        header_tbl = doc.add_table(rows=1, cols=2)
-        header_tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
-        _no_borders(header_tbl)
-        left_cell, right_cell = header_tbl.rows[0].cells
-        left_cell.width = Mm(88)
-        right_cell.width = Mm(88)
-        for i, line in enumerate(header_left):
-            _add_cell_paragraph(left_cell, line)
-        for i, line in enumerate(header_right):
-            _add_cell_paragraph(right_cell, line)
+    if (b.avatar or "").strip():
+        # 有照片：外层 1×2 无边框表格（左：姓名+联系信息；右：证件照）
+        header_outer = doc.add_table(rows=1, cols=2)
+        header_outer.alignment = WD_TABLE_ALIGNMENT.LEFT
+        _no_borders(header_outer)
+        info_cell, photo_cell = header_outer.rows[0].cells
+        info_cell.width = Mm(146)
+        photo_cell.width = Mm(40)
+
+        p_name = info_cell.paragraphs[0]
+        p_name.paragraph_format.space_after = Pt(4)
+        _set_font(p_name.add_run(name), size=20, bold=True)
+
+        if header_left or header_right:
+            header_tbl = info_cell.add_table(rows=1, cols=2)
+            header_tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+            _no_borders(header_tbl)
+            left_cell, right_cell = header_tbl.rows[0].cells
+            left_cell.width = Mm(73)
+            right_cell.width = Mm(73)
+            for line in header_left:
+                _add_cell_paragraph(left_cell, line)
+            for line in header_right:
+                _add_cell_paragraph(right_cell, line)
+
+        insert_photo_into_cell(photo_cell, b.avatar)
+    else:
+        # 无照片：保持原版式（姓名段落 + 两列联系信息表）
+        p_name = doc.add_paragraph()
+        p_name.paragraph_format.space_after = Pt(4)
+        _set_font(p_name.add_run(name), size=20, bold=True)
+
+        if header_left or header_right:
+            header_tbl = doc.add_table(rows=1, cols=2)
+            header_tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+            _no_borders(header_tbl)
+            left_cell, right_cell = header_tbl.rows[0].cells
+            left_cell.width = Mm(88)
+            right_cell.width = Mm(88)
+            for line in header_left:
+                _add_cell_paragraph(left_cell, line)
+            for line in header_right:
+                _add_cell_paragraph(right_cell, line)
 
     # ── 自我评价 ──
     if b.summary:
