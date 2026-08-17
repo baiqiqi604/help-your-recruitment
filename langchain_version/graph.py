@@ -20,6 +20,7 @@ def run_optimize(
     resume_text: str,
     jd_text: str,
     target_company: str = "",
+    photo_base64: str = "",
 ) -> dict[str, Any]:
     """转发到 chain.run_optimize（LCEL 管道）。
 
@@ -27,6 +28,7 @@ def run_optimize(
         resume_text: 简历纯文本
         jd_text: 岗位描述全文
         target_company: 目标公司名称
+        photo_base64: 可选，用户上传的照片（data URI / 纯 base64）
 
     Returns:
         dict，包含 optimized_text / jd_analysis / company_research /
@@ -37,7 +39,9 @@ def run_optimize(
     """
     from chain import run_optimize as _lc_run_optimize
 
-    return _lc_run_optimize(resume_text, jd_text, target_company=target_company)
+    return _lc_run_optimize(
+        resume_text, jd_text, target_company=target_company, photo_base64=photo_base64
+    )
 
 
 __all__ = ["run_optimize"]

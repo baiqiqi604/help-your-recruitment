@@ -10,6 +10,7 @@
 
 ### 新增
 - **feat** 简历支持证件照：前端 canvas 压缩上传（.jpg/.png，≤20MB 自动压缩至 512px），后端 PIL 预缩放（draft+thumbnail 400px+JPEG）插入 Word/HTML 简历右上角；新增 pillow 依赖、照片链路测试，双版同步。
+- **feat** 优化流水线支持证件照传递（photo_base64 经 OptimizeState / LCEL state 流转至 write_output）；审核重试上限恢复为 3（deepseek-chat 单次调用快，重试耗时可接受）。
 
 ### 修复
 - **fix** start_server.py 按端口反查真实监听 PID 写入 .server.pid（启动器进程与实际 uvicorn PID 不同导致 stop/restart 失效），恢复服务正常停止；增强 Windows 脱离 flags（CREATE_NEW_PROCESS_GROUP）。

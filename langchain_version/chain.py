@@ -30,6 +30,8 @@ from config import PATH_CONFIG
 logger = logging.getLogger(__name__)
 
 # 最大重试次数（review 不达标时最多回到 optimize 的次数，与 graph.py 对齐）
+# 说明：当前 deepseek-chat 单次调用快（~7s），3 次重试仅多耗时约 1 分钟，
+# 恢复完整重试以保障审核质量（review 不达标时最多回退优化 3 次）。
 MAX_ATTEMPTS = 3
 
 # 文本安全长度（防止超出模型上下文）
@@ -316,6 +318,7 @@ def _write(state: dict[str, Any]) -> dict[str, Any]:
                 output_html=str(out_dir / f"定制化简历_{target_company}_{role_position}_{default_template}.html"),
                 output_yaml=str(out_dir / f"定制化简历_{target_company}_{role_position}_data.yaml"),
                 template=default_template,
+                photo_base64=state.get("photo_base64", ""),
             )
             resume_html_path = html_out["html_path"]
             resume_yaml_path = html_out["yaml_path"]
@@ -371,6 +374,7 @@ def run_optimize(
     resume_text: str,
     jd_text: str,
     target_company: str = "",
+    photo_base64: str = "",
 ) -> dict[str, Any]:
     """运行完整简历定制流水线（LCEL 管道入口）。
 
@@ -378,6 +382,8 @@ def run_optimize(
         resume_text: 简历纯文本
         jd_text: 岗位描述全文
         target_company: 目标公司名称
+        photo_base64: 可选，用户上传的照片（data URI / 纯 base64），
+            由 write 节点写入生成的简历文档
 
     Returns:
         dict，包含 resume_text / jd_text / target_company / jd_analysis /
@@ -388,6 +394,7 @@ def run_optimize(
         "resume_text": resume_text,
         "jd_text": jd_text,
         "target_company": target_company,
+        "photo_base64": photo_base64 or "",
         "jd_analysis": {},
         "company_research": {},
         "optimized_text": "",
