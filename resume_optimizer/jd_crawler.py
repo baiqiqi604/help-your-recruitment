@@ -37,7 +37,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from config import CRAWLER_CONFIG, BIG_TECH_COMPANIES, HIGH_FREQUENCY_THRESHOLD, PATH_CONFIG
+from config import (
+    BIG_TECH_COMPANIES,
+    CRAWLER_CONFIG,
+    HIGH_FREQUENCY_THRESHOLD,
+    PATH_CONFIG,
+)
 
 logger = logging.getLogger(__name__)
 

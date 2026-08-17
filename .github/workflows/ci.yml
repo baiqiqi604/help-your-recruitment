@@ -20,6 +20,21 @@ jobs:
         # （约定：改动先在 langgraph 落地，随后同步到 langchain）
         run: python scripts/check_sync.py
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装 ruff
+        run: pip install ruff==0.16.3
+
+      - name: 运行 ruff 静态检查（规则集见根目录 ruff.toml）
+        run: ruff check langgraph_version langchain_version scripts start_web.py resume_optimizer
+
   test:
     runs-on: ubuntu-latest
     strategy:

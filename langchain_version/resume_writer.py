@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from schemas import ResumeData
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +186,6 @@ def write_customized_resume(optimized_text: str, output_docx: str) -> str:
 
     try:
         from docx import Document
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.shared import Pt
     except ImportError as e:
         raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
@@ -302,6 +305,7 @@ def write_customized_resume_html(
     output_html: str,
     output_yaml: str | None = None,
     template: str = "classic",
+    output_docx: str | None = None,
 ) -> dict[str, str]:
     """将优化后的简历文本生成为精美 HTML 简历 + 结构化 YAML 数据文件。
 
@@ -313,14 +317,18 @@ def write_customized_resume_html(
         output_html: 输出 HTML 文件路径（必填）
         output_yaml: 输出 YAML 数据文件路径（可选，默认在同目录下加 _data.yaml 后缀）
         template: 模板风格（classic / modern / professional / tech）
+        output_docx: 可选，同时输出一页 A4 精美 Word 简历路径
+            （与 HTML 共用同一次结构化解析，避免重复调用 LLM）
 
     Returns:
-        {"html_path": 绝对路径, "yaml_path": 绝对路径, "check_report": 检查报告文本}
+        {"html_path": 绝对路径, "yaml_path": 绝对路径, "check_report": 检查报告文本,
+         "docx_path": 精美 Word 路径（传入 output_docx 时才有）}
     """
     from pathlib import Path as _Path
 
     from resume_formatter import (
         DEFAULT_TEMPLATE,
+        fit_resume_to_one_page,
         format_check_report,
         parse_resume_text_to_data,
         render_resume_html,
@@ -332,8 +340,15 @@ def write_customized_resume_html(
         raise ValueError("简历文本不能为空")
 
     # 解析为结构化数据
-    data = parse_resume_text_to_data(optimized_text)
+    data_full = parse_resume_text_to_data(optimized_text)
     tpl = template if template in {"classic", "modern", "professional", "tech"} else DEFAULT_TEMPLATE
+
+    # 一页 A4 约束：仅对「渲染」使用裁剪副本（限制经历/项目段数与每段要点数），
+    # 配合模板内嵌的自适应脚本（紧凑样式 + zoom 缩放），保证最终恰好一页 A4；
+    # YAML 数据文件与质量检查仍基于未裁剪的完整数据：YAML 是供迭代修改的完整
+    # 结构化表单（不丢内容），检查报告应如实反映原始内容量（避免裁剪导致
+    # 「摘要过短」等误报，也不因裁剪而自我满足「控制在 1 页」的检查项）
+    data = fit_resume_to_one_page(data_full) if tpl == "classic" else data_full
 
     # 写 HTML
     html_out = _Path(output_html)
@@ -347,18 +362,275 @@ def write_customized_resume_html(
     else:
         yaml_out = html_out.with_name(html_out.stem + "_data.yaml")
     yaml_out.parent.mkdir(parents=True, exist_ok=True)
-    yaml_out.write_text(resume_to_yaml(data), encoding="utf-8")
+    yaml_out.write_text(resume_to_yaml(data_full), encoding="utf-8")
     logger.info("简历 YAML 数据已保存: %s", yaml_out)
 
-    # 质量检查报告
-    check_results = run_resume_check(data, resume_text=optimized_text)
+    # 可选：同时输出一页 A4 精美 Word 简历（与 HTML 共用同一份裁剪后的 data）
+    docx_path = ""
+    if output_docx:
+        try:
+            from resume_writer import write_customized_resume_docx
+
+            docx_path = write_customized_resume_docx(
+                data, output_docx, fit_one_page=False
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("精美 Word 简历生成失败（不影响 HTML/YAML）: %s", e)
+
+    # 质量检查报告（基于未裁剪的完整数据，如实反映原始内容量）
+    check_results = run_resume_check(data_full, resume_text=optimized_text)
     check_report = format_check_report(check_results)
 
     return {
         "html_path": str(html_out.resolve()),
         "yaml_path": str(yaml_out.resolve()),
         "check_report": check_report,
+        "docx_path": docx_path,
     }
+
+
+def write_customized_resume_docx(
+    data: "ResumeData",
+    output_docx: str,
+    fit_one_page: bool = True,
+) -> str:
+    """基于结构化 ResumeData 生成精美 Word 简历（A4 一页约束）。
+
+    版式对齐 classic HTML 模板：
+    - A4 页面 + 紧凑页边距（上下 10/8mm，左右 14mm）
+    - 姓名大号粗体 + 两列联系信息（无边框表格）
+    - 灰色底纹章节标题条（#D8D9D8）
+    - 教育/经历：左侧日期 + 右侧内容
+    - 项目：粗体名称 + 右侧日期 + 要点
+    - 微软雅黑 9pt 正文（较 HTML 10pt 更小，配合一页裁剪保证单页）
+
+    Args:
+        data: 结构化简历数据
+        output_docx: 输出 docx 路径
+        fit_one_page: 是否先执行一页 A4 内容裁剪（默认开启）
+
+    Returns:
+        输出 docx 绝对路径
+
+    Raises:
+        ValueError: data 为空
+    """
+    if data is None:
+        raise ValueError("简历数据不能为空")
+
+    out = Path(output_docx)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from docx import Document
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Mm, Pt, RGBColor
+    except ImportError as e:
+        raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
+
+    if fit_one_page:
+        from resume_formatter import fit_resume_to_one_page
+
+        data = fit_resume_to_one_page(data)
+
+    b = data.basic
+    name = b.name or "未命名"
+
+    # ── 文档与页面设置：A4 + 紧凑边距（一页约束） ──
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width = Mm(210)
+    sec.page_height = Mm(297)
+    sec.top_margin = Mm(10)
+    sec.bottom_margin = Mm(8)
+    sec.left_margin = Mm(14)
+    sec.right_margin = Mm(14)
+
+    normal = doc.styles["Normal"]
+    normal.font.name = "微软雅黑"
+    normal.font.size = Pt(9)
+    normal.paragraph_format.space_after = Pt(2)
+    normal.paragraph_format.line_spacing = 1.15
+
+    def _set_font(run, size: int = 9, bold: bool = False, color: str | None = None) -> None:
+        run.font.name = "微软雅黑"
+        run.font.size = Pt(size)
+        run.bold = bold
+        if color:
+            run.font.color.rgb = RGBColor.from_string(color)
+        rPr = run._element.get_or_add_rPr()
+        rFonts = rPr.get_or_add_rFonts()
+        rFonts.set(qn("w:eastAsia"), "微软雅黑")
+
+    def _no_borders(table) -> None:
+        tblPr = table._tbl.tblPr
+        borders = OxmlElement("w:tblBorders")
+        for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            e = OxmlElement(f"w:{edge}")
+            e.set(qn("w:val"), "none")
+            e.set(qn("w:sz"), "0")
+            borders.append(e)
+        tblPr.append(borders)
+
+    def _shade(paragraph, fill: str = "D8D9D8") -> None:
+        pPr = paragraph._p.get_or_add_pPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), fill)
+        pPr.append(shd)
+
+    def _add_section(title: str) -> None:
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(5)
+        p.paragraph_format.space_after = Pt(2)
+        _shade(p)
+        _set_font(p.add_run(f"  {title}"), size=10.5, bold=True)
+
+    def _add_cell_paragraph(cell, text: str, size: int = 9, bold: bool = False) -> None:
+        p = cell.paragraphs[0] if not cell.paragraphs[0].runs else cell.add_paragraph()
+        p.paragraph_format.space_after = Pt(1)
+        _set_font(p.add_run(text), size=size, bold=bold)
+
+    # ── 头部：姓名 + 两列联系信息 ──
+    p_name = doc.add_paragraph()
+    p_name.paragraph_format.space_after = Pt(4)
+    _set_font(p_name.add_run(name), size=20, bold=True)
+
+    header_left = []
+    header_right = []
+    if b.title:
+        header_left.append(f"求职意向：{b.title}")
+    if data.education and data.education[0].major:
+        header_left.append(f"专业：{data.education[0].major}")
+    if b.phone:
+        header_left.append(f"电话：{b.phone}")
+    if b.location:
+        header_right.append(f"现居地址：{b.location}")
+    if b.email:
+        header_right.append(f"邮箱：{b.email}")
+    if b.github:
+        header_right.append(f"GitHub：{b.github}")
+
+    if header_left or header_right:
+        header_tbl = doc.add_table(rows=1, cols=2)
+        header_tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+        _no_borders(header_tbl)
+        left_cell, right_cell = header_tbl.rows[0].cells
+        left_cell.width = Mm(88)
+        right_cell.width = Mm(88)
+        for i, line in enumerate(header_left):
+            _add_cell_paragraph(left_cell, line)
+        for i, line in enumerate(header_right):
+            _add_cell_paragraph(right_cell, line)
+
+    # ── 自我评价 ──
+    if b.summary:
+        _add_section("自我评价")
+        import re as _re
+
+        summary_lines = [s.strip() for s in b.summary.split("\n") if s.strip()]
+        if len(summary_lines) <= 1:
+            sentences = [s.strip() for s in _re.split(r"[。；！]", b.summary) if len(s.strip()) > 5]
+            summary_lines = sentences if sentences else [b.summary]
+        for line in summary_lines:
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Pt(4)
+            p.paragraph_format.space_after = Pt(1)
+            _set_font(p.add_run(f"• {line}"))
+
+    # ── 教育背景 ──
+    if data.education:
+        _add_section("教育背景")
+        for edu in data.education:
+            tbl = doc.add_table(rows=1, cols=2)
+            tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+            _no_borders(tbl)
+            date_cell, content_cell = tbl.rows[0].cells
+            date_cell.width = Mm(30)
+            content_cell.width = Mm(146)
+            if edu.period:
+                _add_cell_paragraph(date_cell, edu.period)
+            school_line = f"{edu.school}　　{edu.degree} {edu.major}".strip()
+            _add_cell_paragraph(content_cell, school_line, bold=True)
+            if edu.highlights:
+                _add_cell_paragraph(content_cell, f"主修课程：{'、'.join(edu.highlights)}")
+            if edu.gpa:
+                _add_cell_paragraph(content_cell, f"GPA：{edu.gpa}")
+
+    # ── 工作经历 / 学生工作经历 ──
+    if data.experience:
+        is_student_any = any(
+            ("学生" in (e.company or "")) or ("校" in (e.company or "")) or ("学术" in (e.company or ""))
+            for e in data.experience
+        )
+        _add_section("学生工作经历" if is_student_any else "工作经历")
+        for exp in data.experience:
+            tbl = doc.add_table(rows=1, cols=2)
+            tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+            _no_borders(tbl)
+            date_cell, content_cell = tbl.rows[0].cells
+            date_cell.width = Mm(30)
+            content_cell.width = Mm(146)
+            if exp.period:
+                _add_cell_paragraph(date_cell, exp.period)
+            company_line = f"{exp.company}　　{exp.position}".strip()
+            _add_cell_paragraph(content_cell, company_line, bold=True)
+            for pt in exp.points:
+                _add_cell_paragraph(content_cell, f"• {pt}")
+
+    # ── 项目经历 ──
+    if data.projects:
+        _add_section("项目经历")
+        for proj in data.projects:
+            tbl = doc.add_table(rows=1, cols=2)
+            tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+            _no_borders(tbl)
+            date_cell, content_cell = tbl.rows[0].cells
+            date_cell.width = Mm(30)
+            content_cell.width = Mm(146)
+            if proj.period:
+                _add_cell_paragraph(date_cell, proj.period)
+            proj_name = proj.name or ""
+            role_tags = []
+            if proj.role:
+                role_tags.append(proj.role)
+            if proj.tech_stack:
+                role_tags.append("、".join(proj.tech_stack))
+            title_text = proj_name + (f"　|　{'　'.join(role_tags)}" if role_tags else "")
+            _add_cell_paragraph(content_cell, title_text, bold=True)
+            for pt in proj.points:
+                _add_cell_paragraph(content_cell, f"• {pt}")
+
+    # ── 荣誉奖项 ──
+    if data.awards:
+        _add_section("荣誉奖项")
+        for a in data.awards:
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Pt(4)
+            p.paragraph_format.space_after = Pt(1)
+            text = a.name or ""
+            if a.issuer:
+                text += f"　　{a.issuer}"
+            if a.date:
+                text += f"　　{a.date}"
+            _set_font(p.add_run(f"• {text}"))
+
+    # ── 技能特长 ──
+    if data.skills:
+        _add_section("技能特长")
+        for sc in data.skills:
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Pt(4)
+            p.paragraph_format.space_after = Pt(1)
+            items = "、".join(sc.items or [])
+            _set_font(p.add_run(f"• {sc.name}：{items}"))
+
+    doc.save(str(out))
+    logger.info("精美 Word 简历已保存: %s", out)
+    return str(out)
 
 
 if __name__ == "__main__":

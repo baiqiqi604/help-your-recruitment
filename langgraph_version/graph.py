@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 # langgraph 懒加载（避免未安装依赖时模块导入即崩溃）
 try:
-    from langgraph.graph import StateGraph, END  # noqa: F401
+    from langgraph.graph import END, StateGraph  # noqa: F401
 except ImportError:  # pragma: no cover - 依赖缺失时给出明确提示
     StateGraph = None  # type: ignore[assignment]
     END = "END"
@@ -302,12 +302,13 @@ def write_output(state: OptimizeState) -> dict[str, Any]:
     - resume_yaml_path：结构化数据 YAML（便于后续迭代修改）
     - resume_check_report：简历质量检查清单报告（Markdown）
     """
-    from config import PATH_CONFIG
     from resume_writer import (
         write_customized_resume,
         write_customized_resume_html,
         write_interview_advice_docx,
     )
+
+    from config import PATH_CONFIG
 
     target_company = _sanitize_filename(state.get("target_company", "") or "未知公司")
     role_position = _sanitize_filename((state.get("jd_analysis") or {}).get("role_position", "") or "目标岗位")

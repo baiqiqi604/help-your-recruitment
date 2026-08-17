@@ -16,7 +16,6 @@ import logging
 from typing import Any
 
 import llm_client
-from config import LLM_CONFIG
 
 logger = logging.getLogger(__name__)
 

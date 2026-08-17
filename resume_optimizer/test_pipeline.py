@@ -126,8 +126,8 @@ def stage_b_llm_pipeline() -> None:
     print("Stage B：LLM 链路（需要 DeepSeek API Key，或 MOCK_LLM=1 走模拟响应）")
     print("=" * 60)
 
-    from jd_analyzer import analyze_jd
     from content_optimizer import optimize_resume_content
+    from jd_analyzer import analyze_jd
 
     sample_jd = """岗位：Python 后端开发工程师
 职责：负责核心业务系统后端设计与开发；参与系统性能优化。

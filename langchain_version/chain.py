@@ -24,8 +24,8 @@ from typing import Any
 
 from langchain_core.runnables import RunnableLambda
 
-from config import PATH_CONFIG
 import llm_client
+from config import PATH_CONFIG
 
 logger = logging.getLogger(__name__)
 

@@ -133,7 +133,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     listening = _port_open(args.host, args.port)
 
     if listening:
-        state = "running"
         if pid and _process_alive(pid):
             detail = f"PID {pid}（记录于 {_pid_file(version_dir).name}）"
         else:

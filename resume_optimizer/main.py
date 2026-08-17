@@ -85,7 +85,7 @@ def optimize_resume(
         logger.info("Step 4 完成：简历内容已优化")
 
         # ── Step 5: 写回 Word（保留格式）──
-        from resume_writer import write_optimized_resume, docx_to_pdf
+        from resume_writer import docx_to_pdf, write_optimized_resume
 
         output_docx = str(Path(output_dir) / f"{pdf_name}_优化版.docx")
         write_optimized_resume(temp_docx, optimized_text, output_docx)
@@ -253,7 +253,7 @@ def _choose_jd_source() -> dict[str, Any] | None:
 def _jd_from_knowledge_base() -> dict[str, Any] | None:
     """从知识库检索岗位并选择。"""
     try:
-        from jd_knowledge_base import search_jds, get_premium_jobs
+        from jd_knowledge_base import get_premium_jobs, search_jds
     except Exception as e:  # noqa: BLE001
         print(f"知识库不可用: {e}")
         return None

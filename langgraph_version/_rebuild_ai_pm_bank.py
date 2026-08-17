@@ -21,7 +21,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from interview_knowledge_base import add_experiences, clear_interview_kb, count_questions
+from interview_knowledge_base import (
+    add_experiences,
+    clear_interview_kb,
+    count_questions,
+)
 
 logger = logging.getLogger(__name__)
 

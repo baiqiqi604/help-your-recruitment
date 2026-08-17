@@ -14,10 +14,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import agent
 import main
+import pytest
 import validate_runtime
 
 

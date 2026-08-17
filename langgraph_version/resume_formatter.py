@@ -179,8 +179,8 @@ def fit_resume_to_one_page(data: ResumeData, max_entries: int = 3, max_points: i
         exp_limit = 2 if _is_student_work(exp) else max_points
         exp.points = _cut_points(exp.points, exp_limit)
 
-    if len(fit.projects) > 3:
-        fit.projects = fit.projects[:3]
+    if len(fit.projects) > 2:
+        fit.projects = fit.projects[:2]
     for proj in fit.projects:
         proj.points = _cut_points(proj.points, max_points)
 
@@ -371,9 +371,9 @@ def _normalize_resume_data(raw: dict[str, Any]) -> ResumeData:
     ]
 
     languages = [
-        LanguageEntry(name=_to_str(l.get("name")), level=_to_str(l.get("level")))
-        for l in _to_list(raw.get("languages"))
-        if isinstance(l, dict) and _to_str(l.get("name"))
+        LanguageEntry(name=_to_str(lang.get("name")), level=_to_str(lang.get("level")))
+        for lang in _to_list(raw.get("languages"))
+        if isinstance(lang, dict) and _to_str(lang.get("name"))
     ]
 
     return ResumeData(
@@ -616,8 +616,8 @@ def _render_modern(data: ResumeData) -> str:
     lang_html = ""
     if data.languages:
         lang_items = "".join(
-            f'<div class="lang-item"><span class="lang-name">{_h(l.name)}</span><span class="lang-level">{_h(l.level)}</span></div>'
-            for l in data.languages
+            f'<div class="lang-item"><span class="lang-name">{_h(lang.name)}</span><span class="lang-level">{_h(lang.level)}</span></div>'
+            for lang in data.languages
         )
         lang_html = f'''<div class="sidebar-section">
       <h3>语言能力</h3>
@@ -980,9 +980,9 @@ def _render_professional(data: ResumeData) -> str:
             f'<li><span class="left">{"".join(line_parts)}</span><span class="date">{_h(c.date)}</span></li>'
         )
     if data.languages:
-        for l in data.languages:
+        for lang in data.languages:
             honor_list.append(
-                f'<li><span class="left"><span class="name">语言能力 - {_h(l.name)}</span><span class="sub">{_h(l.level)}</span></span></li>'
+                f'<li><span class="left"><span class="name">语言能力 - {_h(lang.name)}</span><span class="sub">{_h(lang.level)}</span></span></li>'
             )
     if honor_list:
         sections_html += f'''<section class="section">
@@ -1218,10 +1218,10 @@ def _render_tech(data: ResumeData) -> str:
         <span class="gh-value">{_h(c.date or c.issuer)}</span>
       </div>
       '''
-    for l in data.languages:
+    for lang in data.languages:
         stats_rows += f'''<div class="gh-stat">
-        <span class="gh-label">Lang: {_h(l.name)}</span>
-        <span class="gh-value">{_h(l.level)}</span>
+        <span class="gh-label">Lang: {_h(lang.name)}</span>
+        <span class="gh-value">{_h(lang.level)}</span>
       </div>
       '''
     if b.summary:
@@ -1985,7 +1985,7 @@ def format_check_report(results: list[ResumeCheckResult]) -> str:
         categories.setdefault(r.category, []).append(r)
     total = len(results)
     passed = sum(1 for r in results if r.passed)
-    lines = [f"# 简历质量检查报告", "", f"**综合评分：{passed}/{total} 项通过**", ""]
+    lines = ["# 简历质量检查报告", "", f"**综合评分：{passed}/{total} 项通过**", ""]
     for cat, items in categories.items():
         cat_pass = sum(1 for r in items if r.passed)
         lines.append(f"## {cat}（{cat_pass}/{len(items)}）")

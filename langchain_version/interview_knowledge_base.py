@@ -23,13 +23,13 @@ import re
 from functools import lru_cache
 from typing import Any
 
-from config import CHROMA_CONFIG, RERANK_CONFIG
-
 # 复用岗位知识库的 ChromaDB 客户端与 BGE Embedding（单例）
 from jd_knowledge_base import _get_chroma_client, _get_embedding_function  # noqa: F401
 
 # Rerank 重排（可选依赖：模型加载失败时自动降级为不重排）
 from reranker import rerank
+
+from config import RERANK_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,78 @@ def _get_interview_collection():
 def _get_interview_title_collection():
     """获取或创建 interview_kb_title 标题索引集合（单例缓存）。"""
     return _get_interview_collection_named(INTERVIEW_TITLE_COLLECTION)
+
+
+def rebuild_interview_title_index() -> int:
+    """从全文集合重建标题索引集合（interview_kb_title）。
+
+    场景：旧库或 _merge_import_banks 等重建脚本只写了全文集合、漏写标题索引，
+    导致 search_questions 每次回退全文集合查询（长文档首查 ~2s、且召回差）。
+    本函数从全文集合读取全部文档，解析出「题目 + 考察点」短文本重建标题集合。
+
+    Returns:
+        写入标题索引的条数（0 表示全文集合为空或失败）
+    """
+    collection = _get_interview_collection()
+    try:
+        existing = collection.get()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("重建标题索引：读取全文集合失败: %s", e)
+        return 0
+
+    ids = (existing or {}).get("ids") or []
+    documents = (existing or {}).get("documents") or []
+    metadatas = (existing or {}).get("metadatas") or []
+    if not ids:
+        logger.info("重建标题索引：全文集合为空，跳过")
+        return 0
+
+    title_ids: list[str] = []
+    title_docs: list[str] = []
+    title_metas: list[dict[str, Any]] = []
+    for i, doc in enumerate(documents):
+        qid = str(ids[i])
+        if qid.endswith(_TITLE_ID_SUFFIX):
+            continue
+        question = _extract_field(doc, "题目")
+        if not question:
+            continue
+        key_points = _extract_list_field(doc, "考察点")
+        parts = [f"题目：{question}"]
+        if key_points:
+            parts.append(f"考察点：{', '.join(key_points)}")
+        title_doc = "\n".join(p for p in parts if p.split("：", 1)[-1].strip())
+        title_ids.append(qid + _TITLE_ID_SUFFIX)
+        title_docs.append(title_doc)
+        title_metas.append(metadatas[i] if i < len(metadatas) else {})
+
+    if not title_ids:
+        logger.info("重建标题索引：无可重建条目")
+        return 0
+
+    title_col = _get_interview_title_collection()
+    # 重建式写入：先清空旧标题条目，再一次性 upsert 全部标题条目
+    # （与 _merge_import_banks 的"清空后一次性 upsert 可正常落盘"结论一致；
+    # 分批增量 upsert 可能触发 ChromaDB 1.5.x compactor 落盘问题。
+    # 若不清空，已从全文集合删除/漏写的旧标题 id 会残留并被 search_questions 命中，
+    # 映射回全文后得到空答案——正是本函数要修复的损坏状态）
+    try:
+        stale = title_col.get()
+        stale_ids = (stale or {}).get("ids") or []
+        if stale_ids:
+            title_col.delete(ids=stale_ids)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("重建标题索引：清理旧标题条目失败: %s", e)
+        return 0
+    try:
+        title_col.upsert(
+            ids=title_ids, documents=title_docs, metadatas=title_metas
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("重建标题索引失败: %s", e)
+        return 0
+    logger.info("重建标题索引完成：%d 条（全文 %d 条）", len(title_ids), len(ids))
+    return len(title_ids)
 
 
 def _question_id(item: dict[str, Any]) -> str:

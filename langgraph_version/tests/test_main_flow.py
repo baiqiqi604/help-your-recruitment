@@ -9,14 +9,13 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from unittest import mock
 
+import main
 import pytest
 
 import config
-import main
 
 
 @pytest.fixture()

@@ -267,7 +267,6 @@ def crawl_jobs(keyword: str, city: str | None = None) -> list[dict[str, Any]]:
         [{id, title, company, city, salary, jd_text, url, platform, crawled_at}]
     """
     city = city or CRAWLER_CONFIG.get("default_city", "全国")
-    timeout = CRAWLER_CONFIG.get("timeout", 30)
     interval = CRAWLER_CONFIG.get("request_interval", 3)
 
     results: list[dict[str, Any]] = []

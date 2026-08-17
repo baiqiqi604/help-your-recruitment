@@ -41,6 +41,7 @@ SHARED_FILES = [
     "reranker.py",
     "resume_reader.py",
     "resume_writer.py",
+    "resume_formatter.py",
     "retrievers.py",
     "schemas.py",
     "start_web_offline.py",

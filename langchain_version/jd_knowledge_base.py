@@ -22,17 +22,17 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from config import (
-    CHROMA_CONFIG,
-    EMBEDDING_CONFIG,
-    PATH_CONFIG,
-    BIG_TECH_COMPANIES,
-    HIGH_FREQUENCY_THRESHOLD,
-    RERANK_CONFIG,
-)
-
 # Rerank 重排（可选依赖：模型加载失败时自动降级为不重排）
 from reranker import rerank
+
+from config import (
+    BIG_TECH_COMPANIES,
+    CHROMA_CONFIG,
+    EMBEDDING_CONFIG,
+    HIGH_FREQUENCY_THRESHOLD,
+    PATH_CONFIG,
+    RERANK_CONFIG,
+)
 
 logger = logging.getLogger(__name__)
 

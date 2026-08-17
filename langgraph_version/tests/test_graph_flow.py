@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import pytest
-
-import config
 from graph import (
-    END,
     MAX_ATTEMPTS,
     analyze_jd,
     load_resume,
@@ -16,6 +13,8 @@ from graph import (
     route_after_stage,
     run_optimize,
 )
+
+import config
 
 SAMPLE_RESUME = (
     "张三，3年Python后端开发经验，熟悉Django、MySQL、Redis，"
@@ -70,10 +69,12 @@ class TestReviewRouting:
             == "optimize"
         )
 
-    def test_fail_at_limit_stops(self) -> None:
+    def test_fail_at_limit_still_outputs(self) -> None:
+        # 行为与 graph.route_after_review 一致：重试超限后仍进入 interview + write_output，
+        # 确保用户拿到面试建议与文档，而非空结果（见 graph.py 条件边注释）
         assert (
             route_after_review({"review_verdict": {"pass": False}, "attempts": MAX_ATTEMPTS})
-            == END
+            == "interview"
         )
 
 

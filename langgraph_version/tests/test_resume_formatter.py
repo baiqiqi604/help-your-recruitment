@@ -16,6 +16,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Type
 
+from resume_formatter import (
+    TEMPLATE_CLASSIC,
+    TEMPLATE_MODERN,
+    TEMPLATE_PROFESSIONAL,
+    TEMPLATE_TECH,
+    _heuristic_parse,
+    fit_resume_to_one_page,
+    format_check_report,
+    render_resume_html,
+    resume_from_yaml,
+    resume_to_yaml,
+    run_resume_check,
+    write_resume_outputs,
+)
 from schemas import (
     BasicInfo,
     EducationEntry,
@@ -23,21 +37,6 @@ from schemas import (
     ProjectEntry,
     ResumeData,
     SkillCategory,
-)
-
-import resume_formatter
-from resume_formatter import (
-    TEMPLATE_MODERN,
-    TEMPLATE_PROFESSIONAL,
-    TEMPLATE_TECH,
-    TEMPLATE_CLASSIC,
-    _heuristic_parse,
-    format_check_report,
-    render_resume_html,
-    resume_from_yaml,
-    resume_to_yaml,
-    run_resume_check,
-    write_resume_outputs,
 )
 
 
@@ -294,6 +293,83 @@ class TestResumeCheck:
         assert basic_required and basic_required[0].passed is False
         # 有改进建议
         assert any(r.suggestion for r in results if not r.passed)
+
+
+# ─────────── 3.5 一页 A4 内容裁剪（fit_resume_to_one_page）────────────
+class TestFitToOnePage:
+    """fit_resume_to_one_page 的边界行为：学生/真实工作识别、条目上限、裁剪规则。"""
+
+    def _make_data(self) -> ResumeData:
+        return ResumeData(
+            basic=BasicInfo(name="张三", title="后端工程师", summary="S" * 300),
+            experience=[
+                ExperienceEntry(company="字节跳动", position="后端", points=["a1", "a2", "a3", "a4"]),
+                ExperienceEntry(company="腾讯", position="后端", points=["b1", "b2", "b3"]),
+                ExperienceEntry(company="美团", position="后端", points=["c1"]),
+                # 学生工作经历（公司名含「校」，应被识别并优先裁掉）
+                ExperienceEntry(company="XX大学校团委", position="干事", points=["s1", "s2", "s3", "s4", "s5"]),
+            ],
+            projects=[
+                ProjectEntry(name="项目A", role="开发", points=["p1", "p2", "p3"]),
+                ProjectEntry(name="项目B", role="开发", points=["q1", "q2"]),
+                ProjectEntry(name="项目C", role="开发", points=["r1"]),
+            ],
+            skills=[SkillCategory(name=f"技能{i}", items=["x"]) for i in range(6)],
+        )
+
+    def test_student_work_dropped_when_real_work_sufficient(self) -> None:
+        fit = fit_resume_to_one_page(self._make_data())
+        companies = [e.company for e in fit.experience]
+        assert "XX大学校团委" not in companies  # 真实工作足够（3 段）→ 学生工作整体裁掉
+        assert len(fit.experience) == 3
+
+    def test_student_work_kept_when_real_work_insufficient(self) -> None:
+        data = self._make_data()
+        # 只剩 2 段真实工作 + 1 段学生工作（真实工作不足 max_entries=3）
+        data.experience = data.experience[:2] + data.experience[3:]
+        fit = fit_resume_to_one_page(data)
+        assert len(fit.experience) == 3
+        assert fit.experience[-1].company == "XX大学校团委"  # 补足到 max_entries=3
+        # 学生工作每段要点上限收紧到 2 条
+        assert len(fit.experience[-1].points) <= 2
+
+    def test_experience_points_capped(self) -> None:
+        fit = fit_resume_to_one_page(self._make_data())
+        for exp in fit.experience:
+            assert len(exp.points) <= 3
+
+    def test_projects_capped_at_two(self) -> None:
+        fit = fit_resume_to_one_page(self._make_data())
+        assert len(fit.projects) == 2
+        for proj in fit.projects:
+            assert len(proj.points) <= 3
+
+    def test_skills_capped_at_four(self) -> None:
+        fit = fit_resume_to_one_page(self._make_data())
+        assert len(fit.skills) <= 4
+
+    def test_summary_trimmed_to_limit(self) -> None:
+        fit = fit_resume_to_one_page(self._make_data())
+        # 无句读长摘要按 160 字截断，尾部追加省略号 → 160 字主干 + 1 个"…"
+        assert len(fit.basic.summary) <= 161
+        assert fit.basic.summary.endswith("…")
+
+    def test_long_point_truncated_with_ellipsis(self) -> None:
+        data = self._make_data()
+        long_point = "长" * 100
+        data.experience[0].points = [long_point]
+        fit = fit_resume_to_one_page(data)
+        kept = fit.experience[0].points[0]
+        assert kept.endswith("…")
+        assert len(kept) <= 81  # 80 字主干 + 省略号
+
+    def test_original_data_unchanged(self) -> None:
+        data = self._make_data()
+        original_summary = data.basic.summary
+        original_projects = len(data.projects)
+        fit_resume_to_one_page(data)
+        assert data.basic.summary == original_summary
+        assert len(data.projects) == original_projects  # model_copy(deep=True) 不修改原对象
 
 
 # ─────────── 4. YAML 序列化往返 ──────────────────────────────────────

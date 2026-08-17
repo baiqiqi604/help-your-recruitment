@@ -1,4 +1,8 @@
-"""FastAPI Web 接口的确定性测试（MOCK_LLM + 依赖桩）。"""
+"""FastAPI Web 接口的确定性测试（MOCK_LLM + 依赖桩，langchain 版）。
+
+与 langgraph 版 tests/test_web_api.py 对齐；/api/optimize 经 graph.py 适配层
+转发到 chain.run_optimize（LCEL 管道）。
+"""
 
 from __future__ import annotations
 

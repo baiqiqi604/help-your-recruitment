@@ -48,6 +48,162 @@ DEFAULT_TEMPLATE = TEMPLATE_CLASSIC
 
 
 # ──────────────────────────────────────────────
+# 一页 A4 约束（经典模板）
+# 1) fit_resume_to_one_page：渲染前对结构化数据做温和裁剪（限制条目/要点数量）
+# 2) _ONE_PAGE_FIT_JS：HTML 内嵌自适应脚本，测量真实渲染高度，
+#    超出一页时先启用紧凑样式，仍超则按比例缩放（zoom），保证打印/预览恰好一页 A4。
+# ──────────────────────────────────────────────
+# A4 打印可用高度：297mm - 上下 padding（15mm*2）= 267mm；留 3mm 容差
+_A4_AVAILABLE_MM = 264.0
+# zoom 下限（0.6 时文字约 6.4pt，过小则说明内容确实超量，需人工精简）
+_FIT_ZOOM_MIN = 0.6
+
+_ONE_PAGE_FIT_JS = """<script>
+(function () {
+  "use strict";
+  var MM_PX = 96 / 25.4;          // 1mm ≈ 3.78px（96dpi）
+  var AVAILABLE_MM = %(avail_mm).1f;
+  var ZOOM_MIN = %(zoom_min).1f;
+
+  function measure() {
+    var el = document.querySelector('.resume');
+    if (!el) return null;
+    return el.getBoundingClientRect().height;
+  }
+
+  function fit() {
+    var el = document.querySelector('.resume');
+    if (!el) return;
+    // 先复位自适应（避免重复累乘 zoom）
+    el.style.zoom = '';
+    el.classList.remove('resume-compact');
+    var limit = AVAILABLE_MM * MM_PX;
+
+    // 第 1 档：启用紧凑样式（缩小边距/行距/字号）
+    el.classList.add('resume-compact');
+    if (measure() <= limit) return;
+
+    // 第 2 档：等比缩放（zoom 会真实改变布局尺寸，打印同样生效）
+    var h = measure();
+    if (h > limit) {
+      var scale = Math.max(ZOOM_MIN, limit / h);
+      el.style.zoom = String(scale);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(fit, 0); });
+  } else {
+    setTimeout(fit, 0);
+  }
+  window.addEventListener('load', function () { setTimeout(fit, 50); });
+  window.addEventListener('beforeprint', fit);
+})();
+</script>
+""" % {"avail_mm": _A4_AVAILABLE_MM, "zoom_min": _FIT_ZOOM_MIN}
+
+
+def fit_resume_to_one_page(data: ResumeData, max_entries: int = 3, max_points: int = 3) -> ResumeData:
+    """对结构化简历做温和裁剪，使内容量控制在一页 A4 以内（尽力而为）。
+
+    只削减"数量与长度"，不重写内容：
+    - summary：保留前 2 句，总长 ≤ 160 字
+    - experience：最多保留最近 max_entries 段（默认 3），每段要点 ≤ max_points 条（默认 3）
+    - projects：最多保留 2 个，每个要点 ≤ max_points 条
+    - skills：最多保留 4 个分组，每组最多 10 项
+    - awards / certifications：各最多 5 条
+    - 单条要点超过 80 字时截断（保留语义完整的主干，尾部加 …）
+
+    一页 A4（A4=297mm，打印 padding 上下各 15mm → 可用约 264mm）按经验可容纳：
+    约 3 段经历 × 3 要点 + 2 个项目 × 3 要点 + 教育 + 技能 ≈ 15-18 条要点。
+    裁剪后仍由模板内嵌自适应脚本兜底（紧凑样式 + zoom），保证最终恰好一页。
+
+    Returns:
+        裁剪后的新 ResumeData（原对象不变）
+    """
+    if data is None:
+        return data
+
+    def _cut_points(points: list[str], limit: int) -> list[str]:
+        out: list[str] = []
+        for p in points:
+            p = (p or "").strip()
+            if not p:
+                continue
+            if len(p) > 80:
+                p = p[:80].rstrip("，。；、 ") + "…"
+            out.append(p)
+            if len(out) >= limit:
+                break
+        return out
+
+    def _cut_summary(text: str, limit: int = 160) -> str:
+        text = (text or "").strip()
+        if not text:
+            return text
+        if len(text) <= limit:
+            return text
+        # 按句切分，保留前 2 句
+        sentences = [s.strip() for s in re.split(r"(?<=[。！？；])", text) if s.strip()]
+        kept = ""
+        for s in sentences:
+            if len(kept) + len(s) > limit:
+                break
+            kept += s
+        kept = kept.strip()
+        return kept + "…" if kept and kept != text else (text[:limit].rstrip("，。；、 ") + "…")
+
+    fit = data.model_copy(deep=True)
+
+    b = fit.basic
+    b.summary = _cut_summary(b.summary)
+
+    # 学生工作经历识别（与渲染时"学生工作经历"标题判断一致）
+    def _is_student_work(exp: Any) -> bool:
+        company = str(getattr(exp, "company", "") or "")
+        return any(k in company for k in ("学生", "校", "学术"))
+
+    student_work = [e for e in fit.experience if _is_student_work(e)]
+    real_work = [e for e in fit.experience if not _is_student_work(e)]
+
+    # 优先保留真实工作经历：
+    # 1) 真实工作经历足够（≥ max_entries）时，学生工作经历整体裁掉；
+    # 2) 不够时补足：学生工作经历最多保留 1 段，且每段要点上限收紧到 2 条。
+    kept: list[Any] = []
+    kept.extend(real_work[:max_entries])
+    if len(kept) < max_entries and student_work:
+        kept.append(student_work[0])
+    fit.experience = kept
+
+    for exp in fit.experience:
+        exp_limit = 2 if _is_student_work(exp) else max_points
+        exp.points = _cut_points(exp.points, exp_limit)
+
+    if len(fit.projects) > 2:
+        fit.projects = fit.projects[:2]
+    for proj in fit.projects:
+        proj.points = _cut_points(proj.points, max_points)
+
+    if len(fit.skills) > 4:
+        fit.skills = fit.skills[:4]
+    for sc in fit.skills:
+        if len(sc.items) > 10:
+            sc.items = sc.items[:10]
+
+    if len(fit.awards) > 5:
+        fit.awards = fit.awards[:5]
+    if len(fit.certifications) > 5:
+        fit.certifications = fit.certifications[:5]
+
+    logger.info(
+        "一页适配：经验 %d 段 / 项目 %d 个 / 要点共 %d 条",
+        len(fit.experience), len(fit.projects),
+        sum(len(e.points) for e in fit.experience) + sum(len(p.points) for p in fit.projects),
+    )
+    return fit
+
+
+# ──────────────────────────────────────────────
 # 1. 纯文本简历 → 结构化 ResumeData
 # ──────────────────────────────────────────────
 
@@ -215,9 +371,9 @@ def _normalize_resume_data(raw: dict[str, Any]) -> ResumeData:
     ]
 
     languages = [
-        LanguageEntry(name=_to_str(l.get("name")), level=_to_str(l.get("level")))
-        for l in _to_list(raw.get("languages"))
-        if isinstance(l, dict) and _to_str(l.get("name"))
+        LanguageEntry(name=_to_str(lang.get("name")), level=_to_str(lang.get("level")))
+        for lang in _to_list(raw.get("languages"))
+        if isinstance(lang, dict) and _to_str(lang.get("name"))
     ]
 
     return ResumeData(
@@ -460,8 +616,8 @@ def _render_modern(data: ResumeData) -> str:
     lang_html = ""
     if data.languages:
         lang_items = "".join(
-            f'<div class="lang-item"><span class="lang-name">{_h(l.name)}</span><span class="lang-level">{_h(l.level)}</span></div>'
-            for l in data.languages
+            f'<div class="lang-item"><span class="lang-name">{_h(lang.name)}</span><span class="lang-level">{_h(lang.level)}</span></div>'
+            for lang in data.languages
         )
         lang_html = f'''<div class="sidebar-section">
       <h3>语言能力</h3>
@@ -824,9 +980,9 @@ def _render_professional(data: ResumeData) -> str:
             f'<li><span class="left">{"".join(line_parts)}</span><span class="date">{_h(c.date)}</span></li>'
         )
     if data.languages:
-        for l in data.languages:
+        for lang in data.languages:
             honor_list.append(
-                f'<li><span class="left"><span class="name">语言能力 - {_h(l.name)}</span><span class="sub">{_h(l.level)}</span></span></li>'
+                f'<li><span class="left"><span class="name">语言能力 - {_h(lang.name)}</span><span class="sub">{_h(lang.level)}</span></span></li>'
             )
     if honor_list:
         sections_html += f'''<section class="section">
@@ -1062,10 +1218,10 @@ def _render_tech(data: ResumeData) -> str:
         <span class="gh-value">{_h(c.date or c.issuer)}</span>
       </div>
       '''
-    for l in data.languages:
+    for lang in data.languages:
         stats_rows += f'''<div class="gh-stat">
-        <span class="gh-label">Lang: {_h(l.name)}</span>
-        <span class="gh-value">{_h(l.level)}</span>
+        <span class="gh-label">Lang: {_h(lang.name)}</span>
+        <span class="gh-value">{_h(lang.level)}</span>
       </div>
       '''
     if b.summary:
@@ -1448,7 +1604,7 @@ def _render_classic(data: ResumeData) -> str:
   }}
   body {{
     font-family: "Microsoft YaHei", "微软雅黑", "PingFang SC", "Hiragino Sans GB", sans-serif;
-    font-size: 10.6pt;
+    font-size: 10pt;
     color: #000000;
     line-height: 1.7;
     background: #fff;
@@ -1475,7 +1631,7 @@ def _render_classic(data: ResumeData) -> str:
   .header-info {{
     display: flex;
     gap: 0;
-    font-size: 10.6pt;
+    font-size: 10pt;
   }}
   .header-col {{
     flex: 1;
@@ -1505,19 +1661,19 @@ def _render_classic(data: ResumeData) -> str:
   .entry-date {{
     width: 100pt;
     flex-shrink: 0;
-    font-size: 10.6pt;
+    font-size: 10pt;
     color: #000;
   }}
   .entry-content {{
     flex: 1;
-    font-size: 10.6pt;
+    font-size: 10pt;
   }}
   .entry-title {{
-    font-size: 10.6pt;
+    font-size: 10pt;
     margin-bottom: 2pt;
   }}
   .sub-line {{
-    font-size: 10.6pt;
+    font-size: 10pt;
     color: #333;
     margin-top: 1pt;
   }}
@@ -1532,15 +1688,15 @@ def _render_classic(data: ResumeData) -> str:
     margin-bottom: 2pt;
   }}
   .proj-name {{
-    font-size: 10.6pt;
+    font-size: 10pt;
     font-weight: bold;
   }}
   .proj-date {{
-    font-size: 10.6pt;
+    font-size: 10pt;
     color: #000;
   }}
   .proj-role {{
-    font-size: 10.6pt;
+    font-size: 10pt;
     color: #333;
     margin-bottom: 3pt;
   }}
@@ -1560,22 +1716,60 @@ def _render_classic(data: ResumeData) -> str:
   }}
   .dot-sm {{
     color: #000;
-    font-size: 10.6pt;
+    font-size: 10pt;
     margin-right: 6pt;
     margin-top: 0;
     flex-shrink: 0;
   }}
   .bullet-text {{
     flex: 1;
-    font-size: 10.6pt;
+    font-size: 10pt;
   }}
   .bullet-text strong {{
     font-weight: bold;
   }}
   .award-date {{
     margin-left: auto;
-    font-size: 10.6pt;
+    font-size: 10pt;
     color: #333;
+  }}
+  /* ── 一页 A4 紧凑模式（由 fit 脚本按需启用）── */
+  .resume.resume-compact {{
+    padding: 12mm 12mm 8mm 12mm;
+  }}
+  .resume.resume-compact .header {{
+    margin-bottom: 4mm;
+  }}
+  .resume.resume-compact .header-name {{
+    font-size: 21pt;
+    margin-bottom: 3pt;
+  }}
+  .resume.resume-compact .section-bar {{
+    margin-top: 3mm;
+    margin-bottom: 2mm;
+    padding: 2.5pt 8pt;
+    font-size: 11pt;
+  }}
+  .resume.resume-compact .entry-row {{
+    margin-bottom: 2mm;
+  }}
+  .resume.resume-compact .proj-entry {{
+    margin-bottom: 2.5mm;
+  }}
+  .resume.resume-compact .bullet-row {{
+    margin-bottom: 1pt;
+    line-height: 1.5;
+  }}
+  .resume.resume-compact .entry-title,
+  .resume.resume-compact .proj-name,
+  .resume.resume-compact .proj-role,
+  .resume.resume-compact .bullet-text,
+  .resume.resume-compact .entry-date,
+  .resume.resume-compact .entry-content,
+  .resume.resume-compact .sub-line,
+  .resume.resume-compact .proj-date,
+  .resume.resume-compact .award-date {{
+    font-size: 9pt;
   }}
   /* ── 打印优化 ── */
   @media print {{
@@ -1633,6 +1827,7 @@ def _render_classic(data: ResumeData) -> str:
   {skills_html}
 
 </div>
+{_ONE_PAGE_FIT_JS}
 </body>
 </html>"""
 
@@ -1790,7 +1985,7 @@ def format_check_report(results: list[ResumeCheckResult]) -> str:
         categories.setdefault(r.category, []).append(r)
     total = len(results)
     passed = sum(1 for r in results if r.passed)
-    lines = [f"# 简历质量检查报告", "", f"**综合评分：{passed}/{total} 项通过**", ""]
+    lines = ["# 简历质量检查报告", "", f"**综合评分：{passed}/{total} 项通过**", ""]
     for cat, items in categories.items():
         cat_pass = sum(1 for r in items if r.passed)
         lines.append(f"## {cat}（{cat_pass}/{len(items)}）")

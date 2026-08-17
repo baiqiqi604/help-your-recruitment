@@ -202,7 +202,7 @@ def chat(request: ChatRequest) -> dict[str, Any]:
         # 命中判定阈值 0.45（cosine 距离）：相关题目 top1 一般 ≤0.31，无关问题 ≥0.5；
         # top_k 提到 8，配合 interview_knowledge_base 的关键词兜底，提高召回
         hits = search_questions(user_input, top_k=8, max_distance=0.45)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("面经检索失败，回退到模型回答")
         hits = []
 
@@ -263,7 +263,7 @@ async def chat_stream(request: ChatRequest):
 
     try:
         hits = search_questions(user_input, top_k=8, max_distance=0.45)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("面经检索失败，回退到模型回答")
         hits = []
 
@@ -464,7 +464,7 @@ def download_file(filename: str) -> Any:
     base = Path(PATH_CONFIG["output_dir"]).resolve()
     target = (base / Path(filename).name).resolve()
     # 防路径穿越：只允许 output 目录内的文件
-    if not str(target).startswith(str(base)):
+    if not target.is_relative_to(base):
         raise HTTPException(status_code=400, detail="非法文件路径")
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"文件不存在: {filename}")

@@ -11,11 +11,9 @@ PDF 转换（pdf2docx / MS Word）依赖环境，仅测试错误路径与空输�
 from __future__ import annotations
 
 import sys
-from typing import Any
 from unittest import mock
 
 import pytest
-
 import resume_reader
 import resume_writer
 

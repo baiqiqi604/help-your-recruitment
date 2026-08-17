@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import sys
 from datetime import datetime
 
 from interview_knowledge_base import (

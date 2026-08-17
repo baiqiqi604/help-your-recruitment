@@ -1,4 +1,7 @@
-"""FastAPI Web 接口补充测试：SSE 流式 / 上传大小限制 / 检索 top_k 钳制 / 下载。"""
+"""FastAPI Web 接口补充测试（langchain 版）：SSE 流式 / 上传大小限制 / 检索 top_k 钳制 / 下载。
+
+与 langgraph 版 tests/test_web_api_extra.py 对齐。
+"""
 
 from __future__ import annotations
 

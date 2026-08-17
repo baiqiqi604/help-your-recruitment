@@ -10,7 +10,6 @@ from typing import Any
 
 from config import LLM_CONFIG, PATH_CONFIG
 
-
 REQUIRED_MODULES = {
     "fastapi": "fastapi",
     "uvicorn": "uvicorn",

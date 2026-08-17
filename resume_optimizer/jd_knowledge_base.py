@@ -26,8 +26,6 @@ from config import (
     CHROMA_CONFIG,
     EMBEDDING_CONFIG,
     PATH_CONFIG,
-    BIG_TECH_COMPANIES,
-    HIGH_FREQUENCY_THRESHOLD,
 )
 
 logger = logging.getLogger(__name__)

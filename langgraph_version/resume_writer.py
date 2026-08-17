@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from schemas import ResumeData
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +186,6 @@ def write_customized_resume(optimized_text: str, output_docx: str) -> str:
 
     try:
         from docx import Document
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.shared import Pt
     except ImportError as e:
         raise ImportError("缺少依赖 python-docx，请执行: pip install python-docx") from e
@@ -325,8 +328,8 @@ def write_customized_resume_html(
 
     from resume_formatter import (
         DEFAULT_TEMPLATE,
-        format_check_report,
         fit_resume_to_one_page,
+        format_check_report,
         parse_resume_text_to_data,
         render_resume_html,
         resume_to_yaml,
@@ -337,13 +340,15 @@ def write_customized_resume_html(
         raise ValueError("简历文本不能为空")
 
     # 解析为结构化数据
-    data = parse_resume_text_to_data(optimized_text)
+    data_full = parse_resume_text_to_data(optimized_text)
     tpl = template if template in {"classic", "modern", "professional", "tech"} else DEFAULT_TEMPLATE
 
-    # 一页 A4 约束：渲染前对内容做温和裁剪（限制经历/项目段数与每段要点数），
-    # 配合模板内嵌的自适应脚本（紧凑样式 + zoom 缩放），保证最终恰好一页 A4
-    if tpl == "classic":
-        data = fit_resume_to_one_page(data)
+    # 一页 A4 约束：仅对「渲染」使用裁剪副本（限制经历/项目段数与每段要点数），
+    # 配合模板内嵌的自适应脚本（紧凑样式 + zoom 缩放），保证最终恰好一页 A4；
+    # YAML 数据文件与质量检查仍基于未裁剪的完整数据：YAML 是供迭代修改的完整
+    # 结构化表单（不丢内容），检查报告应如实反映原始内容量（避免裁剪导致
+    # 「摘要过短」等误报，也不因裁剪而自我满足「控制在 1 页」的检查项）
+    data = fit_resume_to_one_page(data_full) if tpl == "classic" else data_full
 
     # 写 HTML
     html_out = _Path(output_html)
@@ -357,7 +362,7 @@ def write_customized_resume_html(
     else:
         yaml_out = html_out.with_name(html_out.stem + "_data.yaml")
     yaml_out.parent.mkdir(parents=True, exist_ok=True)
-    yaml_out.write_text(resume_to_yaml(data), encoding="utf-8")
+    yaml_out.write_text(resume_to_yaml(data_full), encoding="utf-8")
     logger.info("简历 YAML 数据已保存: %s", yaml_out)
 
     # 可选：同时输出一页 A4 精美 Word 简历（与 HTML 共用同一份裁剪后的 data）
@@ -372,8 +377,8 @@ def write_customized_resume_html(
         except Exception as e:  # noqa: BLE001
             logger.warning("精美 Word 简历生成失败（不影响 HTML/YAML）: %s", e)
 
-    # 质量检查报告
-    check_results = run_resume_check(data, resume_text=optimized_text)
+    # 质量检查报告（基于未裁剪的完整数据，如实反映原始内容量）
+    check_results = run_resume_check(data_full, resume_text=optimized_text)
     check_report = format_check_report(check_results)
 
     return {

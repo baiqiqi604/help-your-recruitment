@@ -9,13 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
-import jd_analyzer
 import company_researcher
 import content_optimizer
-import interview_advisor
 import experience_processor
+import interview_advisor
+import jd_analyzer
+import pytest
 
 SAMPLE_JD_ANALYSIS: dict[str, Any] = {
     "role_position": "Python 后端开发工程师",

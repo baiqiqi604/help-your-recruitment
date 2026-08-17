@@ -24,11 +24,11 @@ from tests.test_resume_formatter import (
     TestWriteFiles,
     TestYamlRoundTrip,
 )
+
 from resume_formatter import (
     TEMPLATE_MODERN,
     TEMPLATE_PROFESSIONAL,
     TEMPLATE_TECH,
-    format_check_report,
     render_resume_html,
     resume_from_yaml,
     resume_to_yaml,
@@ -96,7 +96,6 @@ def run() -> None:
     # 检查报告示例输出
     results = run_resume_check(SAMPLE_DATA)
     total_pass = sum(1 for r in results if r.passed)
-    report = format_check_report(results)
     score = round(total_pass / max(1, len(results)) * 100)
     print(f"── 检查清单: {total_pass}/{len(results)} 通过 (≈{score}分) ──")
 

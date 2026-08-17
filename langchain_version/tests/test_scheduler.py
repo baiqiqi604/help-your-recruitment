@@ -5,8 +5,9 @@ from __future__ import annotations
 import sys
 from unittest import mock
 
-import config
 import scheduler
+
+import config
 
 
 def _patch_modules(monkeypatch, crawl_side_effect) -> mock.MagicMock:

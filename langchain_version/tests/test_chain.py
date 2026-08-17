@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 import pytest
+from chain import MAX_RESUME_CHARS, run_optimize
 
 import config
-from chain import MAX_RESUME_CHARS, run_optimize
 
 SAMPLE_RESUME = (
     "张三，3年Python后端开发经验，熟悉Django、MySQL、Redis，"

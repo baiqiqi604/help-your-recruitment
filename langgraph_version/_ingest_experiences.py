@@ -16,10 +16,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from config import PATH_CONFIG
-from experience_crawler import save_manual_experience
 from experience_processor import process_raw_item
 from interview_knowledge_base import add_experiences, count_questions
+
+from config import PATH_CONFIG
 
 logger = logging.getLogger(__name__)
 

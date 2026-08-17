@@ -15,7 +15,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from config import SCHEDULER_CONFIG, CRAWLER_CONFIG, PATH_CONFIG
+from config import CRAWLER_CONFIG, SCHEDULER_CONFIG
 
 logger = logging.getLogger(__name__)
 

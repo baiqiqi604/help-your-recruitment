@@ -117,7 +117,6 @@ def main() -> None:
 
     # 必须在 bootstrap 之后导入（config 依赖 exe 目录与 .env / 环境变量）
     import uvicorn
-
     import web_app
 
     port = find_free_port()
@@ -136,7 +135,7 @@ def main() -> None:
             try:
                 urllib.request.urlopen(url + "/api/health", timeout=2)
                 break
-            except Exception:
+            except OSError:  # 服务未就绪（连接失败/超时），重试等待
                 time.sleep(0.5)
         if not NO_BROWSER:
             import webbrowser

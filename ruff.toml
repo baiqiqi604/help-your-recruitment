@@ -1,0 +1,25 @@
+# ruff 静态检查配置（CI lint job 与本地共用）
+# 规则集：E4/E7/E9（pycodestyle 错误）、F（pyflakes）、I（isort）、W（pycodestyle 警告）
+# 说明：项目刻意排除 BLE001（宽泛 except 在降级场景大量存在且带 noqa 注释）、
+# DTZ005（datetime.now 未带 tz，脚本场景可接受）等规则，避免噪音淹没真实问题。
+target-version = "py311"
+line-length = 100
+
+select = ["E4", "E7", "E9", "F", "I", "W"]
+
+# 排除：虚拟环境 / 缓存 / 本地模型 / 打包产物
+exclude = [
+    ".venv",
+    ".venv_v1",
+    ".venv-codex312",
+    "venv",
+    "__pycache__",
+    "models",
+    "build",
+    "dist",
+    "desktop/build",
+    "desktop/dist",
+]
+
+[isort]
+known-first-party = ["config", "llm_client", "schemas", "retrievers", "resume_formatter"]
