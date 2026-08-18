@@ -12,8 +12,11 @@
 - **feat** 简历支持证件照：前端 canvas 压缩上传（.jpg/.png，≤20MB 自动压缩至 512px），后端 PIL 预缩放（draft+thumbnail 400px+JPEG）插入 Word/HTML 简历右上角；新增 pillow 依赖、照片链路测试，双版同步。
 - **feat** 优化流水线支持证件照传递（photo_base64 经 OptimizeState / LCEL state 流转至 write_output）；审核重试上限恢复为 3（deepseek-chat 单次调用快，重试耗时可接受）。
 - **feat** 支持多 Provider：新增小米 MiMo（mimo，官网 OpenAI 兼容端点）与火山方舟（ark）；load_dotenv 改为 override=True，.env 正式配置优先于环境残留变量。
+- **feat** CI/CD 管线：ci.yml 增加 workflow_dispatch 手动触发与 pip 缓存（lint/test 提速）；新增 release.yml，推送 v* tag 自动执行同步检查 + lint + 测试（MOCK_LLM）并打包双版本 zip、创建 GitHub Release。
+- **test** langchain 版补齐共享代码测试：移植 langgraph 版 test_resume_io / test_resume_formatter / test_knowledge_bases / test_llm_modules（146 用例），覆盖率 53.47% → 71.24%，恢复 CI langchain 矩阵 60% 覆盖率门槛通过。
 
 ### 修复
+- **fix** resume_writer.py 照片插入函数内局部 import 排序违规（isort I001），两版同步修复，恢复 CI lint 通过。
 - **fix** start_server.py 按端口反查真实监听 PID 写入 .server.pid（启动器进程与实际 uvicorn PID 不同导致 stop/restart 失效），恢复服务正常停止；增强 Windows 脱离 flags（CREATE_NEW_PROCESS_GROUP）。
 - **fix** llm_client 健壮性：qwen3 系列自动关闭 thinking（提速并保证输出规范）；chat 空响应自动重试并回退 reasoning_content；chat_structured 降级解析失败时返回空结构而非抛错，避免中断流水线。
 

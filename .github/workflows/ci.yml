@@ -4,6 +4,7 @@ on:
   push:
     branches: [master, langgraph, langchain]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   sync-check:
@@ -28,6 +29,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: 安装 ruff
         run: pip install ruff==0.16.3
@@ -65,6 +67,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
       - name: 安装运行依赖
         run: pip install -r requirements.txt

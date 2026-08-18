@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install -r langgraph_version/requirements-dev.txt
+
+      - name: 同步一致性检查
+        run: python scripts/check_sync.py
+
+      - name: ruff 静态检查
+        run: ruff check langgraph_version langchain_version scripts start_web.py resume_optimizer
+
+      - name: 运行测试（MOCK_LLM 模式，无需 API Key）
+        env:
+          MOCK_LLM: "1"
+        working-directory: langgraph_version
+        run: >-
+          pytest
+          --cov=config --cov=llm_client --cov=graph --cov=agent
+          --cov=jd_analyzer --cov=content_optimizer --cov=company_researcher
+          --cov=interview_advisor --cov=resume_reader --cov=resume_writer
+          --cov=interview_knowledge_base --cov=jd_knowledge_base
+          --cov=web_app --cov=validate_runtime --cov=main --cov=experience_processor
+          --cov-report=term-missing --cov-fail-under=60
+
+      - name: 打包发布物
+        run: |
+          mkdir -p dist
+          zip -r dist/langgraph_version.zip langgraph_version
+          zip -r dist/langchain_version.zip langchain_version
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.zip

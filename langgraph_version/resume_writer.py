@@ -414,11 +414,11 @@ def insert_photo_into_cell(
         是否插入成功；任何失败只记日志并返回 False，不影响简历主流程
     """
     try:
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.shared import Mm, Pt
-
         import base64 as _b64
         import io as _io
+
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Mm, Pt
 
         raw = (avatar_base64 or "").strip()
         if not raw:
