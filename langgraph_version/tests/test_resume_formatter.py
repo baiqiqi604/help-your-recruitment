@@ -22,6 +22,8 @@ from resume_formatter import (
     TEMPLATE_PROFESSIONAL,
     TEMPLATE_TECH,
     _heuristic_parse,
+    _normalize_resume_data,
+    _strip_skill_proficiency,
     fit_resume_to_one_page,
     format_check_report,
     render_resume_html,
@@ -348,11 +350,18 @@ class TestFitToOnePage:
         fit = fit_resume_to_one_page(self._make_data())
         assert len(fit.skills) <= 4
 
-    def test_summary_trimmed_to_limit(self) -> None:
+    def test_summary_without_punct_kept_whole(self) -> None:
         fit = fit_resume_to_one_page(self._make_data())
-        # 无句读长摘要按 160 字截断，尾部追加省略号 → 160 字主干 + 1 个"…"
-        assert len(fit.basic.summary) <= 161
-        assert fit.basic.summary.endswith("…")
+        # 无句读长摘要（"S"*300）：宁可整句保留，也不在句子中间硬切
+        assert fit.basic.summary == "S" * 300
+        assert not fit.basic.summary.endswith("…")
+
+    def test_summary_kept_whole_when_long(self) -> None:
+        data = self._make_data()
+        data.basic.summary = "短句一。" + "长" * 200 + "。尾部。"
+        fit = fit_resume_to_one_page(data)
+        # 摘要内容完整保留（不截断长句），一页适配由模板 zoom 兜底
+        assert fit.basic.summary == "短句一。" + "长" * 200 + "。尾部。"
 
     def test_long_point_kept_whole_within_limit(self) -> None:
         data = self._make_data()
@@ -363,16 +372,14 @@ class TestFitToOnePage:
         assert kept == long_point
         assert not kept.endswith("…")
 
-    def test_very_long_point_cut_at_sentence_boundary(self) -> None:
+    def test_very_long_point_kept_whole_even_with_punct(self) -> None:
         data = self._make_data()
-        # 超过 200 字且含句读：在 limit 内最后一个句读处截断，保留完整句子 + 省略号
+        # 超过 200 字且含句读：内容完整保留（不再做长度截断），一页适配由模板 zoom 兜底
         long_point = "长" * 150 + "。这是完整句子。" + "尾" * 100
         data.experience[0].points = [long_point]
         fit = fit_resume_to_one_page(data)
-        kept = fit.experience[0].points[0]
-        assert kept.endswith("…")
-        assert "这是完整句子。" in kept  # 句子完整保留，不在句子中间硬切
-        assert kept.rstrip("…").endswith("。")
+        assert fit.experience[0].points[0] == long_point
+        assert not fit.experience[0].points[0].endswith("…")
 
     def test_very_long_point_without_punct_kept_whole(self) -> None:
         data = self._make_data()
@@ -389,6 +396,70 @@ class TestFitToOnePage:
         fit_resume_to_one_page(data)
         assert data.basic.summary == original_summary
         assert len(data.projects) == original_projects  # model_copy(deep=True) 不修改原对象
+
+
+# ─────────── 3.6 教育背景主修课程（highlights ≤ 5 门）────────────
+class TestEducationHighlightsCap:
+    def test_highlights_capped_at_five(self) -> None:
+        raw = {
+            "education": [
+                {
+                    "school": "某大学",
+                    "degree": "本科",
+                    "highlights": [f"课程{i}" for i in range(8)],
+                }
+            ]
+        }
+        data = _normalize_resume_data(raw)
+        assert len(data.education[0].highlights) == 5  # 最多保留 5 门主修课程
+
+    def test_highlights_kept_when_within_cap(self) -> None:
+        raw = {
+            "education": [
+                {
+                    "school": "某大学",
+                    "degree": "本科",
+                    "highlights": ["机器学习", "NLP", "数据结构"],
+                }
+            ]
+        }
+        data = _normalize_resume_data(raw)
+        assert len(data.education[0].highlights) == 3
+
+
+# ─────────── 3.7 技能熟练度括号剥离 ──────────────────────────────
+class TestStripSkillProficiency:
+    """技能项不得以括号标注熟练度（Python（熟练）→ Python）。"""
+
+    def test_strip_various_proficiencies(self) -> None:
+        cases = {
+            "Python（熟练）": "Python",
+            "MySQL(精通)": "MySQL",
+            "Redis（熟悉）": "Redis",
+            "K8s（了解）": "K8s",
+            "Linux / Git（熟练）": "Linux / Git",
+            "Docker": "Docker",
+        }
+        for raw, want in cases.items():
+            assert _strip_skill_proficiency(raw) == want, raw
+
+    def test_normalize_resume_data_strips_skills(self) -> None:
+        raw = {
+            "skills": [
+                {
+                    "name": "核心技能",
+                    "items": ["Python（熟练）", "MySQL(精通)", "Redis（熟悉）", "Docker"],
+                }
+            ]
+        }
+        data = _normalize_resume_data(raw)
+        assert data.skills[0].items == ["Python", "MySQL", "Redis", "Docker"]
+
+    def test_heuristic_parse_strips_skills(self) -> None:
+        text = "姓名：张三\n核心技能：\nPython（熟练）、MySQL(精通)、Redis（熟悉）\n工作经历：\n..."
+        data = _heuristic_parse(text)
+        flat = [s for sc in data.skills for s in sc.items]
+        assert flat == ["Python", "MySQL", "Redis"], flat
 
 
 # ─────────── 4. YAML 序列化往返 ──────────────────────────────────────

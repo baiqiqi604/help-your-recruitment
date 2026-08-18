@@ -152,6 +152,7 @@ class TestConfigValidation:
     def _run_import_config(self, extra_env: dict[str, str]) -> int:
         env = dict(os.environ)
         env["MOCK_LLM"] = "1"
+        env["SKIP_DOTENV"] = "1"  # 隔离本机 .env，防止覆盖测试环境变量
         env.update(extra_env)
         result = subprocess.run(
             [sys.executable, "-c", "import config"],
@@ -165,6 +166,7 @@ class TestConfigValidation:
     def _run_validate_config(self, extra_env: dict[str, str]) -> int:
         env = dict(os.environ)
         env["MOCK_LLM"] = "1"
+        env["SKIP_DOTENV"] = "1"  # 隔离本机 .env，防止覆盖测试环境变量
         env.update(extra_env)
         result = subprocess.run(
             [sys.executable, "-c", "import config; config.validate_config()"],
@@ -191,6 +193,7 @@ class TestConfigValidation:
         # 非法 provider 时 LLM_CONFIG 使用空 api_key 占位（避免 import 崩溃）
         env = dict(os.environ)
         env["MOCK_LLM"] = "1"
+        env["SKIP_DOTENV"] = "1"  # 隔离本机 .env，防止覆盖测试环境变量
         env["LLM_PROVIDER"] = "bogus_provider"
         result = subprocess.run(
             [sys.executable, "-c", "import config; print(repr(config.LLM_CONFIG['api_key']))"],
@@ -205,6 +208,7 @@ class TestConfigValidation:
         env = dict(os.environ)
         env.pop("LLM_PROVIDER", None)
         env["MOCK_LLM"] = "1"
+        env["SKIP_DOTENV"] = "1"  # 隔离本机 .env，防止覆盖测试环境变量
         result = subprocess.run(
             [sys.executable, "-c", "import config; print(config.LLM_PROVIDER)"],
             cwd=self.LANGGRAPH_DIR,

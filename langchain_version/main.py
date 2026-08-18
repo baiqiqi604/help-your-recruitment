@@ -199,7 +199,7 @@ def run_optimize(
     out_table = out_dir_path / "matching_table.json"
 
     write_customized_resume(optimized, str(out_docx))
-    write_interview_advice_docx(advice, str(out_advice))
+    write_interview_advice_docx(advice, str(out_advice), questions=questions)
     out_table.write_text(
         json.dumps(matching_table, ensure_ascii=False, indent=2),
         encoding="utf-8",

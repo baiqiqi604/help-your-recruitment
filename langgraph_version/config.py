@@ -22,14 +22,17 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 # 尝试加载 .env（失败则忽略，依赖环境变量）
-try:
-    from dotenv import load_dotenv
+# SKIP_DOTENV=1（测试子进程隔离用）：跳过 .env 加载，避免本机 .env
+# （override=True）覆盖测试设置的环境变量（如 LLM_PROVIDER=bogus_provider）
+if os.getenv("SKIP_DOTENV", "").strip().lower() not in ("1", "true", "yes"):
+    try:
+        from dotenv import load_dotenv
 
-    # override=True：.env 中的正式配置优先于进程环境变量，
-    # 避免环境残留的旧 key/provider 覆盖 .env（曾导致 401 invalid_api_key）
-    load_dotenv(BASE_DIR / ".env", override=True)
-except ImportError:
-    pass
+        # override=True：.env 中的正式配置优先于进程环境变量，
+        # 避免环境残留的旧 key/provider 覆盖 .env（曾导致 401 invalid_api_key）
+        load_dotenv(BASE_DIR / ".env", override=True)
+    except ImportError:
+        pass
 
 # ──────────────────────────────────────────────
 # 模型离线加载兜底（任何启动入口生效）

@@ -40,6 +40,19 @@ from config import LLM_CONFIG, PATH_CONFIG
 logger = logging.getLogger(__name__)
 
 
+def _plain_advice(text: str) -> str:
+    """将面试建议 Markdown 转成纯净纯文本（前端展示用）。
+
+    懒加载 resume_writer（避免重型依赖进入轻量路径）；
+    Word 导出由 resume_writer.write_interview_advice_docx 保留标题层级与表格。
+    """
+    if not text or not text.strip():
+        return text
+    from resume_writer import markdown_to_plain_text
+
+    return markdown_to_plain_text(text)
+
+
 def _warmup() -> None:
     """启动预热：预加载 embedding 模型 + 完成一次 LLM 冷启动调用。
 
@@ -510,7 +523,8 @@ def optimize(request: OptimizeRequest) -> dict[str, Any]:
         "jd_analysis": result.get("jd_analysis", {}),
         "company_research": result.get("company_research", {}),
         "interview_questions": result.get("interview_questions", []),
-        "interview_advice": result.get("interview_advice", ""),
+        # 前端展示用纯净纯文本（去 markdown 符号）；Word 导出保留标题层级与表格
+        "interview_advice": _plain_advice(result.get("interview_advice", "")),
         # 文档下载（Word 版）
         "resume_docx": Path(result.get("resume_docx_path", "")).name,
         "advice_docx": Path(result.get("advice_docx_path", "")).name,

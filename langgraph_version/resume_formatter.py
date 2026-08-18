@@ -106,14 +106,14 @@ _ONE_PAGE_FIT_JS = """<script>
 def fit_resume_to_one_page(data: ResumeData, max_entries: int = 3, max_points: int = 3) -> ResumeData:
     """对结构化简历做温和裁剪，使内容量控制在一页 A4 以内（尽力而为）。
 
-    只削减"数量与长度"，不重写内容：
-    - summary：保留前 2 句，总长 ≤ 160 字
+    只削减"数量"，不重写内容、不截断长句：
+    - summary：保留能完整放下的句子（整句保留，不硬切）
     - experience：最多保留最近 max_entries 段（默认 3），每段要点 ≤ max_points 条（默认 3）
     - projects：最多保留 2 个，每个要点 ≤ max_points 条
     - skills：最多保留 4 个分组，每组最多 10 项
     - awards / certifications：各最多 5 条
-    - 单条要点超过 200 字时按句读边界截断（保留完整句子，尾部加 …）；
-      无句读边界的长句不硬切（宁可整句保留，也不在句子中间截断）
+    - 要点与摘要内容完整保留（含超长句），不做长度截断；
+      一页适配由模板内嵌自适应脚本（紧凑样式 + zoom）兜底
 
     一页 A4（A4=297mm，打印 padding 上下各 15mm → 可用约 264mm）按经验可容纳：
     约 3 段经历 × 3 要点 + 2 个项目 × 3 要点 + 教育 + 技能 ≈ 15-18 条要点。
@@ -125,46 +125,21 @@ def fit_resume_to_one_page(data: ResumeData, max_entries: int = 3, max_points: i
     if data is None:
         return data
 
-    # 单条要点长度上限（字）：超过时按句读边界截断，保留完整句子
-    _MAX_POINT_CHARS = 200
-    _SENTENCE_ENDS = "。！？；"
-
-    def _cut_at_sentence(text: str, limit: int) -> str:
-        """在 limit 内最后一个句读处截断；找不到句读则整句保留（不硬切）。"""
-        cut = text[:limit]
-        idx = max((cut.rfind(ch) for ch in _SENTENCE_ENDS), default=-1)
-        if idx < 0:
-            return text  # 无句读边界：宁可整句保留，也不在句子中间截断
-        return cut[: idx + 1].rstrip() + "…"
-
     def _cut_points(points: list[str], limit: int) -> list[str]:
+        """按条数裁剪要点；内容完整保留（绝不截断长句）。"""
         out: list[str] = []
         for p in points:
             p = (p or "").strip()
             if not p:
                 continue
-            if len(p) > _MAX_POINT_CHARS:
-                p = _cut_at_sentence(p, _MAX_POINT_CHARS)
             out.append(p)
             if len(out) >= limit:
                 break
         return out
 
-    def _cut_summary(text: str, limit: int = 160) -> str:
-        text = (text or "").strip()
-        if not text:
-            return text
-        if len(text) <= limit:
-            return text
-        # 按句切分，保留前 2 句
-        sentences = [s.strip() for s in re.split(r"(?<=[。！？；])", text) if s.strip()]
-        kept = ""
-        for s in sentences:
-            if len(kept) + len(s) > limit:
-                break
-            kept += s
-        kept = kept.strip()
-        return kept + "…" if kept and kept != text else (text[:limit].rstrip("，。；、 ") + "…")
+    def _cut_summary(text: str) -> str:
+        # 摘要完整保留（不截断长句）；一页适配由模板自适应脚本（zoom）兜底
+        return (text or "").strip()
 
     fit = data.model_copy(deep=True)
 
@@ -226,8 +201,10 @@ _PARSE_PROMPT = """你是一位简历结构化分析师。请将下面的纯文�
 - 严格只使用简历中提到的内容，不要猜测、不要补充、不要虚构。
 - 找不到的字段填空字符串或空数组。
 - 教育经历、工作经历、项目经历都按简历中的**实际顺序**排列（通常是倒序）。
+- 教育背景的 highlights 只填主修课程（最多 5 门，优先与求职方向相关），不要放奖项/证书。
 - 工作/项目的要点 points 必须是数组，每一条按语义切分，不要把多件事写在同一条里。
 - 技能 skills 按分类返回，找不到分类就放到"其他"中。
+- 技能项只写技能名称本身，不要用括号标注熟练度（如「Python（熟练）」「MySQL(精通)」应分别写为「Python」「MySQL」）。
 - 联系方式：邮箱匹配 xxx@xxx.xx，电话匹配 1XX-XXXX-XXXX / 1XXXXXXXXXX 等模式；
   GitHub 匹配 github.com/xxx；LinkedIn 匹配 linkedin.com/in/xxx。
 - summary 为个人摘要/自我评价的连续段落，找不到就填空。
@@ -298,8 +275,26 @@ def parse_resume_text_to_data(resume_text: str) -> ResumeData:
     return _heuristic_parse(text)
 
 
+_PROFICIENCY_SUFFIX_RE = re.compile(r"[（(](熟练|熟悉|精通|掌握|了解|入门|基础|进阶|一般|良好)[）)]\s*$")
+
+
+def _strip_skill_proficiency(item: str) -> str:
+    """去掉技能项尾部的熟练度括号（如「Python（熟练）」→「Python」）。
+
+    解析/兜底路径统一剥离，保证渲染层不再出现括号标注的熟练度。
+    """
+    s = (item or "").strip()
+    while True:
+        m = _PROFICIENCY_SUFFIX_RE.search(s)
+        if not m:
+            break
+        s = s[: m.start()].strip()
+    return s
+
+
 def _normalize_resume_data(raw: dict[str, Any]) -> ResumeData:
     """对 LLM 返回的 JSON 字段做清洗与类型校验，确保能构造 ResumeData。"""
+
     def _to_list(x) -> list:
         if isinstance(x, list):
             return [i for i in x if isinstance(i, (dict, str))]
@@ -323,7 +318,7 @@ def _normalize_resume_data(raw: dict[str, Any]) -> ResumeData:
             major=_to_str(e.get("major")),
             period=_to_str(e.get("period")),
             gpa=_to_str(e.get("gpa")),
-            highlights=[_to_str(h) for h in _to_list(e.get("highlights")) if _to_str(h)],
+            highlights=[_to_str(h) for h in _to_list(e.get("highlights")) if _to_str(h)][:5],
         )
         for e in _to_list(raw.get("education"))
         if isinstance(e, dict) and _to_str(e.get("school"))
@@ -357,7 +352,7 @@ def _normalize_resume_data(raw: dict[str, Any]) -> ResumeData:
     skills = [
         SkillCategory(
             name=_to_str(s.get("name")) or "其他",
-            items=[_to_str(i) for i in _to_list(s.get("items")) if _to_str(i)],
+            items=[_strip_skill_proficiency(_to_str(i)) for i in _to_list(s.get("items")) if _to_str(i)],
         )
         for s in _to_list(raw.get("skills"))
         if isinstance(s, dict) and _to_list(s.get("items"))
@@ -496,7 +491,11 @@ def _heuristic_parse(text: str) -> ResumeData:
     skill_match = re.search(r"(核心技能|技能专长|专业技能)[\s：:]*\n([\s\S]*?)(工作经历|项目经历|教育背景|证书|奖项|$)", text)
     if skill_match:
         skill_block = skill_match.group(2).replace("\n", " ")
-        items = [s.strip() for s in re.split(r"[，,、;；/]", skill_block) if s.strip()]
+        items = [
+            _strip_skill_proficiency(s.strip())
+            for s in re.split(r"[，,、;；/]", skill_block)
+            if s.strip()
+        ]
         if items:
             skills.append(SkillCategory(name="专业技能", items=items[:30]))
 
@@ -712,7 +711,7 @@ def _render_modern(data: ResumeData) -> str:
     for edu in data.education:
         highlights = ""
         if edu.highlights:
-            highlights = f'<div class="entry-subtitle">{" · ".join(_h(h) for h in edu.highlights)}</div>'
+            highlights = f'<div class="entry-subtitle">{" · ".join(_h(h) for h in edu.highlights[:5])}</div>'
         gpa_html = f"<div class='entry-subtitle'>GPA：{_h(edu.gpa)}</div>" if edu.gpa else ""
         edu_html += f'''<div class="entry">
         <div class="entry-header">
@@ -943,7 +942,7 @@ def _render_professional(data: ResumeData) -> str:
         if edu.gpa:
             sub_parts.append("GPA: " + _h(edu.gpa))
         if edu.highlights:
-            sub_parts.extend(_h(h) for h in edu.highlights)
+            sub_parts.extend(_h(h) for h in edu.highlights[:5])
         edu_html += f'''<div class="entry">
         <div class="entry-header">
           <span class="entry-school">{_h(edu.school)}</span>
@@ -1494,7 +1493,7 @@ def _render_classic(data: ResumeData) -> str:
             school_line = f"{_h(edu.school)}&emsp;&emsp;{_h(edu.degree)} {_h(edu.major)}"
             courses = ""
             if edu.highlights:
-                courses = f'<div class="sub-line">主修课程：{"、".join(_h(h) for h in edu.highlights)}</div>'
+                courses = f'<div class="sub-line">主修课程：{"、".join(_h(h) for h in edu.highlights[:5])}</div>'
             gpa_line = f'<div class="sub-line">GPA：{_h(edu.gpa)}</div>' if edu.gpa else ""
             edu_rows += f"""
             <div class="entry-row">

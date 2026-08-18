@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -218,14 +219,97 @@ def write_customized_resume(optimized_text: str, output_docx: str) -> str:
     return str(out)
 
 
-def write_interview_advice_docx(advice_text: str, output_docx: str) -> str:
-    """将面试建议（Markdown 文本）渲染为 Word 文档。
+def _strip_inline_markdown(text: str) -> str:
+    """去除行内 Markdown 标记（加粗/斜体/行内代码/链接），保留纯文本。"""
+    patterns = (
+        (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),            # **加粗** → 加粗
+        (re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)"), r"\1"),  # *斜体* → 斜体
+        (re.compile(r"`([^`]+)`"), r"\1"),                  # `代码` → 代码
+        (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),      # [文字](链接) → 文字
+    )
+    for pattern, repl in patterns:
+        text = pattern.sub(repl, text)
+    return text.strip()
 
-    支持 # / ## / ### 标题、- 无序列表、1. 有序列表、普通段落。
+
+def _render_markdown_table(doc, rows: list[list[str]]) -> None:
+    """将 Markdown 表格行渲染为 Word 表格（首行为表头，自动跳过分隔行）。"""
+    if not rows:
+        return
+    # 跳过 --- / :--: 分隔行
+    body = [
+        r for r in rows[1:]
+        if not all(re.fullmatch(r":?-{3,}:?", c.strip()) for c in r)
+    ]
+    ncols = max(len(r) for r in rows)
+    table = doc.add_table(rows=1, cols=ncols)
+    try:
+        table.style = "Table Grid"
+    except Exception:  # 样式名不可用时使用默认边框
+        pass
+    hdr = table.rows[0].cells
+    for j, cell in enumerate(rows[0][:ncols]):
+        hdr[j].text = _strip_inline_markdown(cell)
+    for row in body:
+        cells = table.add_row().cells
+        for j in range(ncols):
+            cells[j].text = _strip_inline_markdown(row[j]) if j < len(row) else ""
+    doc.add_paragraph()
+
+
+def markdown_to_plain_text(text: str) -> str:
+    """将 Markdown 文本转成纯净纯文本（去标题/列表/行内标记/表格符号）。
+
+    供前端展示 / 文本导出使用；Word 渲染请用 write_interview_advice_docx
+    （保留标题层级与表格结构）。
+    """
+    if not text:
+        return text
+    lines: list[str] = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s:
+            lines.append("")
+            continue
+        # 行首标题 / 列表 / 引用符号（# - • * > 等）
+        s = re.sub(r"^[*#>\-\u2022\u00b7\s]+(?=\S)", "", s)
+        # 行内加粗 / 斜体 / 行内代码 / 链接
+        s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
+        s = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", s)
+        s = re.sub(r"`([^`]+)`", r"\1", s)
+        s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", s)
+        # 管道表格行：| a | b | → a | b（保留分隔，供阅读）
+        if s.startswith("|") and s.endswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if not all(re.fullmatch(r":?-{3,}:?", c) for c in cells):  # 跳过分隔行
+                s = " | ".join(cells)
+            else:
+                continue
+        s = s.replace("*", "").strip()
+        if s:
+            lines.append(s)
+        elif lines and lines[-1] != "":
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
+def write_interview_advice_docx(
+    advice_text: str,
+    output_docx: str,
+    questions: list[dict[str, str]] | None = None,
+) -> str:
+    """将面试建议（Markdown 文本）渲染为纯净 Word 文档。
+
+    支持 # / ## / ### 标题、- 无序列表、1. 有序列表、普通段落；
+    自动去除行内 Markdown 标记（**加粗**、*斜体*、`代码`、[链接](url)）；
+    Markdown 管道表格（| a | b |）渲染为 Word 表格；
+    传入 questions（[{"stage","question","prepare_hint"}]）时，
+    在文末追加「面试问题清单」表格。
 
     Args:
         advice_text: 面试建议 Markdown 文本（来自 interview_advisor.build_interview_advice）
         output_docx: 输出 docx 路径
+        questions: 面试问题清单（可选，渲染为表格）
 
     Returns:
         输出 docx 绝对路径
@@ -251,46 +335,83 @@ def write_interview_advice_docx(advice_text: str, output_docx: str) -> str:
     normal.font.name = "微软雅黑"
     normal.font.size = Pt(10.5)
 
-    for line in advice_text.splitlines():
-        stripped = line.strip()
+    table_buf: list[list[str]] = []  # 连续 | 行累积为表格
+
+    def _flush_table() -> None:
+        if table_buf:
+            _render_markdown_table(doc, table_buf)
+            table_buf.clear()
+
+    for raw_line in advice_text.splitlines():
+        stripped = raw_line.strip()
         if not stripped:
+            _flush_table()
             continue
 
-        if stripped.startswith("### "):
+        # Markdown 管道表格行（| a | b |）→ 累积到表格缓冲区
+        if stripped.startswith("|") and stripped.endswith("|"):
+            table_buf.append([c.strip() for c in stripped.strip("|").split("|")])
+            continue
+
+        _flush_table()
+        line = _strip_inline_markdown(stripped)
+
+        if line.startswith("### "):
             para = doc.add_paragraph()
-            run = para.add_run(stripped[4:])
+            run = para.add_run(line[4:])
             run.bold = True
             run.font.size = Pt(12)
             para.paragraph_format.space_before = Pt(10)
             para.paragraph_format.space_after = Pt(3)
-        elif stripped.startswith("## "):
+        elif line.startswith("## "):
             para = doc.add_paragraph()
-            run = para.add_run(stripped[3:])
+            run = para.add_run(line[3:])
             run.bold = True
             run.font.size = Pt(14)
             para.paragraph_format.space_before = Pt(14)
             para.paragraph_format.space_after = Pt(4)
-        elif stripped.startswith("# "):
+        elif line.startswith("# "):
             para = doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = para.add_run(stripped[2:])
+            run = para.add_run(line[2:])
             run.bold = True
             run.font.size = Pt(16)
             para.paragraph_format.space_after = Pt(10)
-        elif stripped.startswith("- ") or stripped.startswith("• "):
+        elif line.startswith("- ") or line.startswith("• "):
             para = doc.add_paragraph()
             para.paragraph_format.left_indent = Pt(18)
             para.paragraph_format.space_after = Pt(2)
-            para.add_run("• " + stripped.lstrip("-• ").strip())
-        elif stripped[0].isdigit() and ". " in stripped[:4]:
+            para.add_run("• " + line.lstrip("-• ").strip())
+        elif line[0].isdigit() and ". " in line[:4]:
             para = doc.add_paragraph()
             para.paragraph_format.left_indent = Pt(18)
             para.paragraph_format.space_after = Pt(2)
-            para.add_run(stripped)
+            para.add_run(line)
         else:
             para = doc.add_paragraph()
             para.paragraph_format.space_after = Pt(2)
-            para.add_run(stripped)
+            para.add_run(line)
+
+    _flush_table()
+
+    # 面试问题清单表格（结构化数据，文末追加）
+    if questions:
+        para = doc.add_paragraph()
+        run = para.add_run("面试问题清单")
+        run.bold = True
+        run.font.size = Pt(14)
+        para.paragraph_format.space_before = Pt(14)
+        para.paragraph_format.space_after = Pt(4)
+        rows = [["面试轮次", "面试问题", "准备提示"]]
+        for q in questions:
+            rows.append(
+                [
+                    str(q.get("stage", "")),
+                    str(q.get("question", "")),
+                    str(q.get("prepare_hint", "")),
+                ]
+            )
+        _render_markdown_table(doc, rows)
 
     doc.save(str(out))
     logger.info("面试建议已保存: %s", out)
@@ -656,7 +777,7 @@ def write_customized_resume_docx(
             school_line = f"{edu.school}　　{edu.degree} {edu.major}".strip()
             _add_cell_paragraph(content_cell, school_line, bold=True)
             if edu.highlights:
-                _add_cell_paragraph(content_cell, f"主修课程：{'、'.join(edu.highlights)}")
+                _add_cell_paragraph(content_cell, f"主修课程：{'、'.join(edu.highlights[:5])}")
             if edu.gpa:
                 _add_cell_paragraph(content_cell, f"GPA：{edu.gpa}")
 

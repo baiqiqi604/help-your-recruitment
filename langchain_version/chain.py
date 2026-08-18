@@ -331,7 +331,9 @@ def _write(state: dict[str, Any]) -> dict[str, Any]:
     if advice_text:
         try:
             advice_docx_path = write_interview_advice_docx(
-                advice_text, str(out_dir / f"面试建议_{target_company}_{role_position}.docx")
+                advice_text,
+                str(out_dir / f"面试建议_{target_company}_{role_position}.docx"),
+                questions=state.get("interview_questions"),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("面试建议文档生成失败: %s", e)
