@@ -431,8 +431,23 @@ def search_questions(
             item = dict(filtered[idx])
             item["rerank_score"] = score
             ordered.append(item)
+        # 确定性排序：rerank_score 降序，同分按 id 升序——保证同一查询
+        # 每次返回字节级一致（并列分不随排序/检索顺序漂移），利于前缀缓存命中
+        ordered.sort(
+            key=lambda q: (
+                -float(q.get("rerank_score") or 0.0),
+                str(q.get("id") or ""),
+            )
+        )
         return ordered
-    return filtered[:top_k]
+    # 无 rerank 兜底：distance 升序（向量原序），同距离按 id 升序保持稳定
+    return sorted(
+        filtered[:top_k],
+        key=lambda q: (
+            float(q["distance"]) if q.get("distance") is not None else float("inf"),
+            str(q.get("id") or ""),
+        ),
+    )
 
 
 def _extract_keywords(query: str, max_kw: int = 6) -> list[str]:

@@ -463,16 +463,51 @@ def get_llm():
     return _make_llm()
 
 
+def _log_usage(response: Any, label: str = "") -> None:
+    """记录 LLM 调用用量与 DeepSeek 前缀缓存命中统计（日志级别）。
+
+    从 LangChain 响应提取 prompt_cache_hit_tokens / prompt_cache_miss_tokens
+    （DeepSeek 原始字段），计算命中率并输出，用于量化缓存优化效果。
+    """
+    if mock_enabled():
+        return
+    usage = getattr(response, "usage_metadata", None) or {}
+    raw = (getattr(response, "response_metadata", None) or {}).get("token_usage") or {}
+    hit = (
+        raw.get("prompt_cache_hit_tokens")
+        or (usage.get("input_token_details") or {}).get("cache_read")
+        or 0
+    )
+    miss = raw.get("prompt_cache_miss_tokens")
+    if miss is None:
+        miss = max(0, int(usage.get("input_tokens") or 0) - int(hit or 0))
+    hit, miss = int(hit or 0), int(miss or 0)
+    total = hit + miss
+    rate = 100.0 * hit / total if total else 0.0
+    logger.info(
+        "LLM usage%s: input=%s output=%s cache_hit=%s cache_miss=%s hit_rate=%.1f%%",
+        f"[{label}]" if label else "",
+        usage.get("input_tokens", ""),
+        usage.get("output_tokens", ""),
+        hit,
+        miss,
+        rate,
+    )
+
+
 def chat(
     prompt: str,
     system: str | None = None,
     max_tokens: int | None = None,
+    history: list[dict[str, str]] | None = None,
     mock_scenario: str | None = None,
 ) -> str:
     """发送单轮对话请求，返回模型文本响应。
 
     max_tokens: 可选覆盖输出上限（默认用全局配置 4096；总结/答疑类短回答
     可传更小值以显著加快响应）。
+    history: 可选多轮历史（[{role: user|assistant, content}]，append-only，
+    插在 system 与当前 prompt 之间，保证前缀稳定以命中 DeepSeek 缓存）。
     mock_scenario: MOCK 模式下的显式场景名（见 MOCK_SCENARIOS），
     用于替代 prompt 关键字匹配，保证 mock 行为稳定。
     """
@@ -480,12 +515,17 @@ def chat(
         logger.info("[MOCK] 返回模拟 LLM 响应（场景=%s）", mock_scenario or "auto")
         return _mock_chat(prompt, system, mock_scenario)
 
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     llm = get_llm() if max_tokens is None else _make_llm(max_tokens=max_tokens)
     messages = []
     if system:
         messages.append(SystemMessage(content=system))
+    for m in history or []:
+        if m.get("role") == "assistant":
+            messages.append(AIMessage(content=m.get("content", "")))
+        else:
+            messages.append(HumanMessage(content=m.get("content", "")))
     messages.append(HumanMessage(content=prompt))
 
     response = llm.invoke(messages)
@@ -499,6 +539,7 @@ def chat(
         reasoning = getattr(response, "reasoning_content", None)
         if reasoning:
             text = extract_text_content(reasoning)
+    _log_usage(response, "chat")
     return text
 
 
@@ -506,6 +547,7 @@ def stream_chat(
     prompt: str,
     system: str | None = None,
     max_tokens: int | None = None,
+    history: list[dict[str, str]] | None = None,
     mock_scenario: str | None = None,
 ) -> Any:
     """发送单轮对话请求，逐块产出文本（生成器，供 SSE 流式输出）。
@@ -517,6 +559,7 @@ def stream_chat(
         prompt: 用户输入
         system: 系统提示词（可选）
         max_tokens: 可选覆盖输出上限
+        history: 可选多轮历史（append-only，插在 system 与当前 prompt 之间）
         mock_scenario: MOCK 模式下的显式场景名
 
     Yields:
@@ -528,18 +571,28 @@ def stream_chat(
             yield text[i : i + 12]
         return
 
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     llm = get_llm() if max_tokens is None else _make_llm(max_tokens=max_tokens)
     messages = []
     if system:
         messages.append(SystemMessage(content=system))
+    for m in history or []:
+        if m.get("role") == "assistant":
+            messages.append(AIMessage(content=m.get("content", "")))
+        else:
+            messages.append(HumanMessage(content=m.get("content", "")))
     messages.append(HumanMessage(content=prompt))
 
+    usage_chunk = None
     for chunk in llm.stream(messages):
         text = extract_text_content(chunk.content)
         if text:
             yield text
+        if getattr(chunk, "usage_metadata", None):
+            usage_chunk = chunk
+    if usage_chunk is not None:
+        _log_usage(usage_chunk, "stream")
 
 
 def chat_json(

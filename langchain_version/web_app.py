@@ -152,6 +152,49 @@ def index() -> str:
 # ──────────────────────────────────────────────
 # 对话接口
 # ──────────────────────────────────────────────
+# 未命中题库时使用的静态 system（固定前缀，保证跨会话/跨请求缓存命中；
+# 动态内容（用户问题）只出现在其后，不进入前缀）
+_FALLBACK_SYSTEM = (
+    "你是求职面试答疑助手。请用通俗清晰的语言直接回答用户的问题；"
+    "回答准确、克制、结构化，必要时用列表分点；不确定的内容明确说明。"
+)
+
+
+# ──────────────────────────────────────────────
+# 会话历史（服务端 append-only，缓存友好）
+# 设计要点（配合 DeepSeek 前缀缓存）：
+#   1. 历史只追加、绝不改写/重排：第 N 轮输入 = 第 N-1 轮输入 + 少量新 token，
+#      前缀字节稳定 → 第 2 轮起命中率显著上升；
+#   2. 超限策略 = 整体重置：超过轮次上限时清空历史、只保留当前轮。
+#      绝不"截断头部保留最近"——那会让历史段不再是任何历史请求的前缀，
+#      整段 miss；整体重置后新请求回退到 system+tools 共享前缀，反而仍可命中；
+#   3. 历史以 session_id（thread_id）为键，与 agent checkpoint 的隔离粒度一致。
+# ──────────────────────────────────────────────
+_SESSION_HISTORY: dict[str, list[dict[str, str]]] = {}
+_SESSION_HISTORY_LOCK = threading.Lock()
+_SESSION_MAX_MESSAGES = 40  # 20 轮（user+assistant 各一条）；超限整体重置
+
+
+def _get_session_history(session_id: str) -> list[dict[str, str]]:
+    """返回会话历史消息列表（不存在则初始化为空）。"""
+    with _SESSION_HISTORY_LOCK:
+        return _SESSION_HISTORY.setdefault(session_id, [])
+
+
+def _append_session_message(session_id: str, role: str, content: str) -> None:
+    """向会话历史追加一条消息；超限时整体重置（仅保留当前轮）。"""
+    with _SESSION_HISTORY_LOCK:
+        history = _SESSION_HISTORY.setdefault(session_id, [])
+        history.append({"role": role, "content": content})
+        if len(history) > _SESSION_MAX_MESSAGES:
+            logger.info(
+                "会话 %s 历史超限（%d 条），整体重置以保持缓存前缀稳定",
+                session_id,
+                len(history),
+            )
+            _SESSION_HISTORY[session_id] = history[-2:]  # 保留当前轮 user+assistant
+
+
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> dict[str, Any]:
     """面经咨询接口：RAG 优先答疑（聊天式）。
@@ -187,21 +230,30 @@ def chat(request: ChatRequest) -> dict[str, Any]:
         logger.exception("面经检索失败，回退到模型回答")
         hits = []
 
+    # 服务端会话历史（append-only）：取历史 → 追加本轮 user → LLM 调用带上历史，
+    # 保证第 2 轮起输入前缀逐轮复用（DeepSeek 前缀缓存命中）
+    history = _get_session_history(session_id)
+    _append_session_message(session_id, "user", user_input)
+
     if hits:
         # ── RAG 命中：LLM 基于面经内容总结回答 + 附相关面试题 ──
-        reply = _summarize_kb_answer(user_input, hits)
+        reply = _summarize_kb_answer(user_input, hits, history=history)
+        _append_session_message(session_id, "assistant", reply)
         return {"reply": reply, "source": "rag", "questions": hits, "session_id": session_id}
 
     # ── 未命中：大模型直接回答并标注 ──
     import llm_client
 
     try:
-        model_answer = llm_client.chat(user_input)
+        model_answer = llm_client.chat(
+            user_input, system=_FALLBACK_SYSTEM, history=history
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception("大模型回答失败")
         raise HTTPException(status_code=503, detail="对话服务暂时不可用") from e
 
     answer = "【本题库暂无收录，以下为模型回答】\n\n" + str(model_answer).strip()
+    _append_session_message(session_id, "assistant", answer)
     return {"reply": answer, "source": "llm", "questions": [], "session_id": session_id}
 
 
@@ -256,6 +308,11 @@ async def chat_stream(request: ChatRequest):
 
         yield sse({"event": "start", "source": "rag" if hits else "llm"})
 
+        # 服务端会话历史（append-only）：与 /api/chat 一致，LLM 调用带上历史
+        history = _get_session_history(session_id)
+        _append_session_message(session_id, "user", user_input)
+
+        reply_parts: list[str] = []
         if hits:
             # ── RAG 命中：LLM 基于面经内容流式总结回答 ──
             kb_text = ""
@@ -277,30 +334,45 @@ async def chat_stream(request: ChatRequest):
             )
             prompt = f"用户问题：{user_input}\n\n【面经题库内容】\n{kb_text}"
             try:
-                for delta in llm_client.stream_chat(prompt, system, max_tokens=1500):
+                for delta in llm_client.stream_chat(
+                    prompt, system, max_tokens=1500, history=history
+                ):
                     if delta:
+                        reply_parts.append(delta)
                         yield sse({"event": "delta", "text": delta})
             except Exception as e:  # noqa: BLE001
                 logger.warning("流式总结失败，回退直接整理: %s", e)
-                yield sse({"event": "delta", "text": _format_kb_reply(user_input, hits)})
+                fallback = _format_kb_reply(user_input, hits)
+                reply_parts.append(fallback)
+                yield sse({"event": "delta", "text": fallback})
             yield sse({"event": "questions", "questions": hits})
         else:
             # ── 未命中：大模型直接流式回答并标注 ──
             try:
                 first = True
-                for delta in llm_client.stream_chat(user_input):
+                for delta in llm_client.stream_chat(
+                    user_input, system=_FALLBACK_SYSTEM, history=history
+                ):
                     if not delta:
                         continue
                     if first:
-                        yield sse({"event": "delta", "text": "【本题库暂无收录，以下为模型回答】\n\n"})
+                        prefix = "【本题库暂无收录，以下为模型回答】\n\n"
+                        reply_parts.append(prefix)
+                        yield sse({"event": "delta", "text": prefix})
                         first = False
+                    reply_parts.append(delta)
                     yield sse({"event": "delta", "text": delta})
                 if first:  # 一个字符都没产出
-                    yield sse({"event": "delta", "text": "（模型无输出）"})
+                    fallback = "（模型无输出）"
+                    reply_parts.append(fallback)
+                    yield sse({"event": "delta", "text": fallback})
             except Exception as e:  # noqa: BLE001
                 logger.warning("流式回答失败: %s", e)
-                yield sse({"event": "delta", "text": f"（回答失败：{e}）"})
+                fallback = f"（回答失败：{e}）"
+                reply_parts.append(fallback)
+                yield sse({"event": "delta", "text": fallback})
 
+        _append_session_message(session_id, "assistant", "".join(reply_parts))
         yield sse({"event": "done"})
 
     return StreamingResponse(
@@ -310,7 +382,11 @@ async def chat_stream(request: ChatRequest):
     )
 
 
-def _summarize_kb_answer(user_input: str, questions: list[dict[str, Any]]) -> str:
+def _summarize_kb_answer(
+    user_input: str,
+    questions: list[dict[str, Any]],
+    history: list[dict[str, str]] | None = None,
+) -> str:
     """让 LLM 基于命中的面经内容总结成连贯答案（相关面试题由前端渲染可点击列表）。
 
     LLM 调用失败时回退为逐条整理（_format_kb_reply）。
@@ -338,7 +414,7 @@ def _summarize_kb_answer(user_input: str, questions: list[dict[str, Any]]) -> st
     prompt = f"用户问题：{user_input}\n\n【面经题库内容】\n{kb_text}"
     try:
         # 总结类短回答：max_tokens=1500 即可，显著加快响应
-        summary = llm_client.chat(prompt, system, max_tokens=1500)
+        summary = llm_client.chat(prompt, system, max_tokens=1500, history=history)
     except Exception as e:  # noqa: BLE001
         logger.warning("LLM 总结失败，回退为直接整理: %s", e)
         return _format_kb_reply(user_input, questions)
