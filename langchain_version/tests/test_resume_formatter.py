@@ -354,14 +354,33 @@ class TestFitToOnePage:
         assert len(fit.basic.summary) <= 161
         assert fit.basic.summary.endswith("…")
 
-    def test_long_point_truncated_with_ellipsis(self) -> None:
+    def test_long_point_kept_whole_within_limit(self) -> None:
         data = self._make_data()
-        long_point = "长" * 100
+        long_point = "长" * 100  # 100 字低于新上限（200 字）→ 完整保留，不截断
+        data.experience[0].points = [long_point]
+        fit = fit_resume_to_one_page(data)
+        kept = fit.experience[0].points[0]
+        assert kept == long_point
+        assert not kept.endswith("…")
+
+    def test_very_long_point_cut_at_sentence_boundary(self) -> None:
+        data = self._make_data()
+        # 超过 200 字且含句读：在 limit 内最后一个句读处截断，保留完整句子 + 省略号
+        long_point = "长" * 150 + "。这是完整句子。" + "尾" * 100
         data.experience[0].points = [long_point]
         fit = fit_resume_to_one_page(data)
         kept = fit.experience[0].points[0]
         assert kept.endswith("…")
-        assert len(kept) <= 81  # 80 字主干 + 省略号
+        assert "这是完整句子。" in kept  # 句子完整保留，不在句子中间硬切
+        assert kept.rstrip("…").endswith("。")
+
+    def test_very_long_point_without_punct_kept_whole(self) -> None:
+        data = self._make_data()
+        # 超过 200 字且无句读：不硬切，整句保留（宁可超长也不截断）
+        long_point = "长" * 300
+        data.experience[0].points = [long_point]
+        fit = fit_resume_to_one_page(data)
+        assert fit.experience[0].points[0] == long_point
 
     def test_original_data_unchanged(self) -> None:
         data = self._make_data()

@@ -112,7 +112,8 @@ def fit_resume_to_one_page(data: ResumeData, max_entries: int = 3, max_points: i
     - projects：最多保留 2 个，每个要点 ≤ max_points 条
     - skills：最多保留 4 个分组，每组最多 10 项
     - awards / certifications：各最多 5 条
-    - 单条要点超过 80 字时截断（保留语义完整的主干，尾部加 …）
+    - 单条要点超过 200 字时按句读边界截断（保留完整句子，尾部加 …）；
+      无句读边界的长句不硬切（宁可整句保留，也不在句子中间截断）
 
     一页 A4（A4=297mm，打印 padding 上下各 15mm → 可用约 264mm）按经验可容纳：
     约 3 段经历 × 3 要点 + 2 个项目 × 3 要点 + 教育 + 技能 ≈ 15-18 条要点。
@@ -124,14 +125,26 @@ def fit_resume_to_one_page(data: ResumeData, max_entries: int = 3, max_points: i
     if data is None:
         return data
 
+    # 单条要点长度上限（字）：超过时按句读边界截断，保留完整句子
+    _MAX_POINT_CHARS = 200
+    _SENTENCE_ENDS = "。！？；"
+
+    def _cut_at_sentence(text: str, limit: int) -> str:
+        """在 limit 内最后一个句读处截断；找不到句读则整句保留（不硬切）。"""
+        cut = text[:limit]
+        idx = max((cut.rfind(ch) for ch in _SENTENCE_ENDS), default=-1)
+        if idx < 0:
+            return text  # 无句读边界：宁可整句保留，也不在句子中间截断
+        return cut[: idx + 1].rstrip() + "…"
+
     def _cut_points(points: list[str], limit: int) -> list[str]:
         out: list[str] = []
         for p in points:
             p = (p or "").strip()
             if not p:
                 continue
-            if len(p) > 80:
-                p = p[:80].rstrip("，。；、 ") + "…"
+            if len(p) > _MAX_POINT_CHARS:
+                p = _cut_at_sentence(p, _MAX_POINT_CHARS)
             out.append(p)
             if len(out) >= limit:
                 break

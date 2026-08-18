@@ -823,7 +823,8 @@
           data.resume_html || "",
           data.resume_yaml || "",
           data.resume_check_report || "",
-          data.pdf_export_guide || ""
+          data.pdf_export_guide || "",
+          data.resume_docx || ""
         );
         document.getElementById("result").style.display = "block";
         setStatus("success", "定制完成！已生成定制化简历与面试建议。");
@@ -869,12 +870,18 @@
       box.style.display = "block";
     }
 
-    function renderResumeFormatterCards(resumeHtml, resumeYaml, checkReport, pdfGuide) {
-      // 1) HTML + YAML 下载卡片
+    function renderResumeFormatterCards(resumeHtml, resumeYaml, checkReport, pdfGuide, resumeDocx) {
+      // 1) HTML + Word + YAML 下载卡片
       const box = document.getElementById("resume-formatter-links");
       const content = document.getElementById("resume-formatter-content");
-      if (!resumeHtml && !resumeYaml) { box.style.display = "none"; } else {
+      if (!resumeHtml && !resumeYaml && !resumeDocx) { box.style.display = "none"; } else {
         const items = [];
+        if (resumeDocx) {
+          items.push(
+            '<a class="btn btn-outline" style="margin-right:10px;" href="/api/download?filename=' + encodeURIComponent(resumeDocx) + '" target="_blank">' +
+            '<i class="ti ti-file-word"></i> 下载精美简历（Word 版）</a>'
+          );
+        }
         if (resumeHtml) {
           items.push(
             '<a class="btn btn-outline" style="margin-right:10px;" href="/api/download?filename=' + encodeURIComponent(resumeHtml) + '" target="_blank">' +
